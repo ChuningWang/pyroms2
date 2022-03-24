@@ -24,10 +24,10 @@ If you don't want to use Conda, that's fine, but you will have to do more of the
 
 The following are required and are all available through [Conda-Forge].
 
-  * Python >= 3.4 (Python 3.9 currently recommended for new environments)
+  * Python >= 3.9 (Python 3.9 currently recommended for new environments)
+  * [netcdf4]
   * [xESMF]
     * [scipy]
-    * [netcdf4]
     * [Xarray]
       * [numpy]
       * [cftime]
@@ -36,6 +36,7 @@ The following are required and are all available through [Conda-Forge].
   * [Cartopy]
     * [matplotlib]
     * ...
+  * [xgcm]
   * [gridgen-c]
   * [pip] (if use pip for package installation)
 
@@ -65,6 +66,8 @@ $ conda create -n pyroms_env python=3.9
 $ conda activate pyroms_env
 $ conda install -c conda-forge xesmf
 $ conda install -c conda-forge cartopy
+$ conda install -c conda-forge xgcm
+$ conda install -c conda-forge netcdf4
 $ conda install -c conda-forge gridgen
 ```
 
@@ -73,7 +76,7 @@ To clone a copy of the source and install the pyROMS packages, you can use the f
 # Install pyROMS2
 $ cd /path/to/install
 $ git clone https://github.com/ChuningWang/pyroms2.git
-$ pip install -e pyroms
+$ pip install -e .
 ```
 
 An [editable-mode](https://pip.pypa.io/en/stable/reference/pip_install/#editable-installs)
@@ -135,3 +138,4 @@ A jupyter-notebook project will be attached later to demonstrate the functionali
 [SCRIP]: https://github.com/SCRIP-Project/SCRIP
 [Basemap]: https://basemaptutorial.readthedocs.io/en/latest/
 [lpsolve55]: http://lpsolve.sourceforge.net/5.5/index.htm
+[xgcm]: https://xgcm.readthedocs.io/en/latest/index.html

@@ -1,6 +1,7 @@
 import os
 import yaml
 import numpy as np
+import xarray as xr
 from datetime import datetime
 import netCDF4 as nc
 import pyproj
@@ -9,12 +10,6 @@ from pyroms.hgrid import CGrid, CGridGeo, rho_to_vert, rho_to_vert_geo
 from pyroms.vgrid import SCoord, ZCoord
 from pyroms.sta_grid import StaGrid
 from pyroms import io
-
-try:
-    import xarray as xr
-except ImportError:
-    print('[pyroms] Cannot import Xarray. Xarray operations are not ' +
-          'loaded.')
 
 """
 define a dictionary that will remember gridid's that are defined from

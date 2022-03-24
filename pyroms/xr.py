@@ -5,7 +5,6 @@ from xarray import Dataset, DataArray
 from xgcm import Grid
 
 import matplotlib.pyplot as plt
-from cmocean import cm
 
 import pyproj
 import pyroms
@@ -504,7 +503,7 @@ class RomsDataArrayAccessor(RomsAccessor):
         sea_color = (0.0, 0.0, 0.0, 0)
         # ice_color = (0.9, 0.9, 0.9, 0.5)
         fig, ax = plt.subplots()
-        self.h.roms.plot.pcolormesh(geo=True, ax=ax, vmin=0, cmap=cm.deep)
+        self.h.roms.plot.pcolormesh(geo=True, ax=ax, vmin=0, cmap='YlGn')
         cmap = plt.matplotlib.colors.ListedColormap(
             [land_color, sea_color], name='land/sea')
         self.mask.roms.plot.pcolormesh(geo=True, ax=ax,
@@ -521,7 +520,7 @@ class RomsDataArrayAccessor(RomsAccessor):
         sea_color = (0.0, 0.0, 0.0, 0)
         # ice_color = (0.9, 0.9, 0.9, 0.5)
         fig, ax = plt.subplots()
-        self.h.roms.plot.pcolormesh(geo=True, ax=ax, vmin=0, cmap=cm.deep)
+        self.h.roms.plot.pcolormesh(geo=True, ax=ax, vmin=0, cmap='YlGn')
         cmap = plt.matplotlib.colors.ListedColormap(
             [land_color, sea_color], name='land/sea')
         self.mask.roms.plot.pcolormesh(geo=True, ax=ax,
@@ -1047,7 +1046,7 @@ class CoordInteractor:
         sea_color = (0.0, 0.0, 0.0, 0)
         ice_color = (0.9, 0.9, 0.9, 0.5)
         fig, ax = plt.subplots()
-        obj.h.roms.plot.pcolormesh(geo=True, ax=ax, vmin=0, cmap=cm.deep)
+        obj.h.roms.plot.pcolormesh(geo=True, ax=ax, vmin=0, cmap='YlGn')
         cmap = plt.matplotlib.colors.ListedColormap(
             [land_color, sea_color, ice_color], name='land/sea/ice')
         obj.mask.roms.plot.pcolormesh(geo=True, ax=ax,
