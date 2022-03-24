@@ -7,6 +7,8 @@ from typing import List, Tuple, Union
 from matplotlib.axes._subplots import Axes
 
 # Python/C interface
+import os
+import glob
 import ctypes
 
 # computation kernels
@@ -1282,8 +1284,28 @@ class Gridgen:
                  focus=None, proj=None, nnodes=14, precision=1.0e-12, nppe=3,
                  newton=True, thin=True, checksimplepoly=True, verbose=False):
 
-        self._libgridgen = np.ctypeslib.load_library(
-            'libgridgen', pyroms.__path__[0])
+        foundit = False
+        conda_lib_path = os.getenv('CONDA_PREFIX') + '/lib'
+        if len(glob.glob(conda_lib_path + '/libgridgen*.so')) > 0:
+            self._libgridgen = \
+                np.ctypeslib.load_library('libgridgen', conda_lib_path)
+            foundit = True
+        else:
+            ld_lib_path_list = os.getenv('LD_LIBRARY_PATH')
+            ld_lib_path_list = ld_lib_path_list.split(':')
+            for ld_lib_path in ld_lib_path_list:
+                if len(glob.glob(ld_lib_path + '/libgridgen*.so')) > 0:
+                    self._libgridgen = \
+                        np.ctypeslib.load_library('libgridgen', ld_lib_path)
+                    foundit = True
+                    break
+        if not foundit:
+            self._libgridgen = \
+                np.ctypeslib.load_library('libgridgen', pyroms.__path__[0])
+            foundit = True
+        else:
+            raise ImportError(
+                'Cannot locate the Dynamic Link Library libgridgen.so.')
 
         class GRIDSTATS(ctypes.Structure):
             _fields_ = [
