@@ -26,12 +26,13 @@ The following are required and are all available through [Conda-Forge].
 
   * Python >= 3.4 (Python 3.9 currently recommended for new environments)
   * [xESMF]
+    * [scipy]
+    * [netcdf4]
     * [Xarray]
       * [numpy]
-      * [scipy]
-      * [netcdf4]
       * [cftime]
       * ...
+    * ...
   * [Cartopy]
     * [matplotlib]
     * ...
