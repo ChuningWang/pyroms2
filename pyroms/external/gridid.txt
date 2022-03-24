@@ -1,0 +1,26 @@
+# gridid definition file template.
+#
+#
+id      = ESPRESSO
+name    = ESPRESSO
+grdfile = /storage/ROMS/espresso/Data/espresso_c05_grid.nc
+N       = 36
+grdtype = roms
+Vtrans  = 1
+theta_s = 5
+theta_b = 0.4
+Tcline  = 5
+#
+#
+id      = ESPRESSO_Z
+name    = ESPRESSO_Z
+grdfile = /storage/ROMS/espresso/Data/espresso_c05_grid.nc
+N       = 48
+grdtype = z
+depth   : [-4500.  -4000.  -3500., -3000.  -2500.  -2000.  -1750.  -1500.  \
+           -1250.  -1000.   -900.,  -800.   -700.   -600.   -500.   -400.  \
+            -300.   -250.   -200.,  -175.   -150.   -125.   -100.    -90.  \
+             -80.    -70.    -60.,   -50.    -45.    -40.    -35.    -30.  \
+             -25.    -20.   -17.5,   -15.   -12.5    -10.     -9.     -8.  \
+              -7.     -6.     -5.,    -4.     -3.     -2.     -1.      0.  \
+          ]

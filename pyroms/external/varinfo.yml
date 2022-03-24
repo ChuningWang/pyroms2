@@ -1,0 +1,16 @@
+# Glosea5
+name : Glosea5
+vars :
+  t    : time
+  x    : longitude
+  y    : latitude
+  z    : depth
+  salt : so_foam
+  temp : thetao_foam
+  zeta : zos_foam
+  u    : uo_foam
+  v    : vo_foam
+  aice : siconc
+  hice : sithick
+  uice : usi
+  vice : vsi
