@@ -543,8 +543,10 @@ class CGridGeo(CGrid):
            lon_u is None or lat_u is None or \
            lon_v is None or lat_v is None:
 
-            x_vert, y_vert = self.proj(lon_vert, lat_vert)
+            proj = self.proj
+            x_vert, y_vert = proj(lon_vert, lat_vert)
             super(CGridGeo, self).__init__(x_vert, y_vert, mask_rho=mask_rho)
+            self.proj = proj
 
             self.lon_rho, self.lat_rho = \
                 self.proj(self.x_rho, self.y_rho, inverse=True)
