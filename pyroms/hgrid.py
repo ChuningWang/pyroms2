@@ -894,7 +894,7 @@ class BoundaryInteractor:
 
         G : generate grid from the current boundary using gridgen
         T : toggle visability of the current grid
-        N : close plot and execute next step'
+        N : close plot and execute next step
 
     Attributes:
         bry.x : the X boundary points
@@ -1513,7 +1513,7 @@ class EditMaskIJ:
     Edit grd mask. Mask/Unsmask cell by a simple click on the cell.
     Mask modification are store in mask_change.txt for further use.
 
-    Key commands:
+    Key-binding commands:
         e : toggle between Editing/Viewing mode
         N : end mask editing mode
     """
@@ -1969,22 +1969,16 @@ class GetPositionFromMap(EditMask):
 
     _epsilon = 20
 
-    def __call__(self, geo=False, ax=None):
+    def __call__(self, ax=None):
 
         self.xi, self.eta, self.x, self.y, self.angle = [], [], [], [], []
-        if self.proj is not None:
-            self.lon, self.lat = [], []
-        self._line = Line2D([], [], marker='o', mfc='k', ms=8,
-                            ls='-', color='k', alpha=0.5, lw=1,
-                            animated=True)
-        self._ax.add_line(self._line)
-
-        if geo:
+        if self.hgrid.spherical:
             self.proj = self.hgrid.proj
+            self.lon, self.lat = [], []
         else:
             self.proj = None
 
-        if self.proj is None:
+        if not self.hgrid.spherical:
             self.xv = self.hgrid.x_vert
             self.yv = self.hgrid.y_vert
             if ax is None:
@@ -1992,8 +1986,8 @@ class GetPositionFromMap(EditMask):
             ax.plot(self.coast[:, 0], self.coast[:, 1],
                     color='k', ls='-', lw=0.5)
         else:
-            lon, lat = self.proj(self.hgrid.x_rho.mean(), self.y_rho.mean(),
-                                 inverse=True)
+            lon, lat = self.proj(
+                self.hgrid.x_rho.mean(), self.hgrid.y_rho.mean(), inverse=True)
             # Only support Stereographic projection for now
             self._proj_az = pyproj.Proj(
                 proj='stere', lon_0=lon, lat_0=lat)
@@ -2005,11 +1999,29 @@ class GetPositionFromMap(EditMask):
 
             _, ax = plt.subplots(subplot_kw={'projection': self._mproj})
             ax.coastlines(resolution='10m')
+            ax.gridlines(xlocs=range(-180, 180, 10), ylocs=range(-90, 90, 5),
+                         linewidth=0.5, draw_labels=True)
 
         self._ax, self._canvas = ax, ax.figure.canvas
         self._pc = self._ax.pcolormesh(
             self.xv, self.yv, self.mask, cmap=self.cm,
-            vmin=0, vmax=self.cm.N-1, edgecolor='k', linewidth=0.1)
+            vmin=0, vmax=self.cm.N-1)
+        shp = self.xv.shape
+        if max(shp) <= 100:
+            lw = 0.7
+        elif max(shp) <= 200:
+            lw = 0.5
+        elif max(shp) <= 500:
+            lw = 0.3
+        else:
+            lw = 0.1
+        self._ax.plot(self.xv, self.yv, '-k', lw=lw)
+        self._ax.plot(self.xv.T, self.yv.T, '-k', lw=lw)
+
+        self._line = Line2D([], [], marker='o', mfc='k', ms=8,
+                            ls='-', color='k', alpha=0.5, lw=1,
+                            animated=True)
+        self._ax.add_line(self._line)
 
         self._xc = 0.25*(self.xv[1:, 1:]+self.xv[1:, :-1] +
                          self.xv[:-1, 1:]+self.xv[:-1, :-1])
@@ -2022,13 +2034,17 @@ class GetPositionFromMap(EditMask):
         print('    e: toggle between Editing/Viewing mode')
         print('    N: end editing')
 
-        fig.canvas.mpl_connect('draw_event', self._on_draw)
-        fig.canvas.mpl_connect('button_press_event', self._on_button_press)
-        fig.canvas.mpl_connect('button_release_event', self._on_button_release)
-        fig.canvas.mpl_connect('key_press_event', self._on_key_press)
-        fig.canvas.mpl_connect('motion_notify_event', self._on_motion_notify)
+        self._canvas.mpl_connect('draw_event', self._on_draw)
+        self._canvas.mpl_connect('button_press_event',
+                                 self._on_button_press)
+        self._canvas.mpl_connect('button_release_event',
+                                 self._on_button_release)
+        self._canvas.mpl_connect('key_press_event',
+                                 self._on_key_press)
+        self._canvas.mpl_connect('motion_notify_event',
+                                 self._on_motion_notify)
 
-        fig.canvas.draw()
+        self._canvas.draw()
         plt.show()
 
     def _get_ind_under_point(self, event):
@@ -2055,7 +2071,7 @@ class GetPositionFromMap(EditMask):
 
         # Print coordiante to screen
         if self.hgrid.spherical:
-            lon, lat = self.proj(x, y, inverse=True)
+            lon, lat = self._proj_az(x, y, inverse=True)
             print(r'      ' + sign + '%5d %5d %12.1f %12.1f %10.3f %10.3f'
                   % (j, i, x, y, lon, lat))
             return j, i, x, y, lon, lat
@@ -2077,7 +2093,7 @@ class GetPositionFromMap(EditMask):
 
         if event.button == 1:
             # Process track coordinates
-            npts = self._line.get_xydata().shape[0]
+            npts = len(self._line.get_xydata())
             if npts < 2:
                 # If less than two points, always insert a new point
                 if npts == 0:
@@ -2092,17 +2108,20 @@ class GetPositionFromMap(EditMask):
                     p = event.x, event.y
                     xy = self._line.get_xydata()
                     xy_ax = self._line.get_transform().transform(xy)
-                    for i in range(len(xy_ax)-1):
-                        s0, s1 = xy_ax[i], xy_ax[i+1]
-                        d = dist_point_to_segment(p, s0, s1)
+                    for i in range(npts-1):
+                        d = dist_point_to_segment(p, xy_ax[i], xy_ax[i+1])
                         if d <= self._epsilon:
                             iidx = i+1
                             break
+                    if iidx == 0:
+                        d0 = (xy_ax[0, 0] - event.x)**2 + \
+                             (xy_ax[0, 1] - event.y)**2
+                        d1 = (xy_ax[-1, 0] - event.x)**2 + \
+                             (xy_ax[-1, 1] - event.y)**2
+                        if d1 < d0:
+                            iidx = npts
 
-            if iidx == 0:
-                # Add a point to the end of the track line
-                d = dist_point_to_segment(p, s0, s1)
-            else:
+            if self._ind is None:
                 # Add a point in the middle of the track line
                 xy = self._line.get_xydata()
                 xy = np.insert(xy, iidx, [event.xdata, event.ydata], axis=0)
@@ -2187,7 +2206,7 @@ class GetPositionFromMap(EditMask):
             self._clicking = not self._clicking
             self._ax.set_title(
                 'Editing %s -- click "e" to toggle' % self._clicking)
-            self._fig.canvas.draw()
+            self._canvas.draw()
             if self._clicking:
                 if self.hgrid.spherical:
                     print('Coords:   xi,  eta,           x,           y,' +
