@@ -1305,9 +1305,6 @@ class Gridgen:
             self._libgridgen = \
                 np.ctypeslib.load_library('libgridgen', pyroms.__path__[0])
             foundit = True
-        else:
-            raise ImportError(
-                'Cannot locate the Dynamic Link Library libgridgen.so.')
 
         class GRIDSTATS(ctypes.Structure):
             _fields_ = [
@@ -1741,7 +1738,7 @@ class EditMask(EditMaskIJ):
     def _on_button_press(self, event):
         if event.inaxes and self._clicking:
             d = np.hypot(self._xc - event.xdata, self._yc - event.ydata)
-            idx = np.argwhere(d.ravel() == d.min()).item()
+            idx = np.argmin(d)
             i, j = np.unravel_index(idx, d.shape)
         else:
             return
@@ -2048,13 +2045,15 @@ class GetPositionFromMap(EditMask):
         plt.show()
 
     def _get_ind_under_point(self, event):
-        xy = np.asarray(self._line.get_xydata())
+        """
+        get the index of the vertex under point if within epsilon tolerance
+        """
+        xy = self._line.get_xydata()
         xy = self._line.get_transform().transform(xy)
         x, y = xy[:, 0], xy[:, 1]
 
-        d = np.hypot(np.array(x) - event.x, np.array(y) - event.y)
-        indseq, = np.nonzero(d == d.min())
-        ind = indseq[0]
+        d = np.hypot(x - event.x, y - event.y)
+        ind = d.argmin()
 
         if d[ind] >= self._epsilon:
             ind = None
@@ -2066,7 +2065,7 @@ class GetPositionFromMap(EditMask):
         """
         x, y = event.xdata, event.ydata
         d = np.hypot(self._xc - x, self._yc - y)
-        idx = np.argwhere(d.ravel() == d.min()).item()
+        idx = np.argmin(d)
         i, j = np.unravel_index(idx, d.shape)
 
         # Print coordiante to screen
@@ -2217,6 +2216,51 @@ class GetPositionFromMap(EditMask):
             print('Ending editing...')
             plt.close()
             return
+
+
+class TrackSelector(GetPositionFromMap):
+    """
+    Get cell index position and coordinate Interactively.
+    """
+
+    def interp(self, N=100):
+        """
+        Interpolate the transect on selected nodes onto N+1 points.
+        """
+        self.xi, self.eta = np.asarray(self.xi), np.asarray(self.eta)
+        self.x, self.y = np.asarray(self.x), np.asarray(self.y)
+        self.angle = np.asarray(self.angle)
+        a0 = np.zeros(len(self.x))
+        a0[1:] = np.hypot(self.x[1:] - self.x[:-1],
+                          self.y[1:] - self.y[:-1]).cumsum()
+        a1 = np.linspace(a0[0], a0[-1], N+1)
+        a0m, a1m = np.meshgrid(a0, a1)
+        dis = a0m - a1m
+        dis = dis[:, 1:]*dis[:, :-1]
+        idx = dis.argmin(axis=1)
+        frac = (a1 - a0[idx])/(a0[idx+1] - a0[idx])
+
+        x = self.x[idx] + frac*(self.x[idx+1] - self.x[idx])
+        y = self.y[idx] + frac*(self.y[idx+1] - self.y[idx])
+        xi, eta = [], []
+        for xx, yy in zip(x, y):
+            d = np.hypot(self._xc - xx, self._yc - yy)
+            idx = d.argmin()
+            etai, xii = np.unravel_index(idx, d.shape)
+            xi.append(xii)
+            eta.append(etai)
+        xi, eta = np.array(xi), np.array(eta)
+        angle = self.hgrid.angle_rho[eta, xi]
+
+        self.dis0, self.dis = a0, a1
+        self.xi0, self.eta0 = self.xi, self.eta
+        self.x0, self.y0, self.angle0 = self.x, self.y, self.angle
+        self.xi, self.eta, self.x, self.y, self.angle = xi, eta, x, y, angle
+        if self.hgrid.spherical:
+            lon, lat = self._proj_az(x, y, inverse=True)
+            self.lon0, self.lat0 = self.lon, self.lat
+            self.lon, self.lat = lon, lat
+        return
 
 
 def rho_to_vert(xr: np.ndarray, yr: np.ndarray,

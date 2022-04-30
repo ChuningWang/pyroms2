@@ -802,7 +802,6 @@ class RDataset(Dataset):
         ds         - Dataset of roms file(s) loaded with xr.open_(mf)dataset()
         grid       - pyROMS grid object
         interp_rho - switch to enable interpolation to rho-points
-
     """
 
     __slots__ = ('_grid', '_interp_rho')
@@ -1033,25 +1032,3 @@ class RDataset(Dataset):
                 self.roms.longitude_wrap()
             if self.lon_rho.max() - self.lon_rho.min() > 355:
                 self.roms.longitude_wrap()
-
-
-class CoordInteractor:
-    def __init__(self, obj, iceshelf=False):
-        """
-        Pre-process variables.
-        """
-
-        lon, lat = [], []
-        land_color = (0.3, 0.3, 0.3)
-        sea_color = (0.0, 0.0, 0.0, 0)
-        ice_color = (0.9, 0.9, 0.9, 0.5)
-        fig, ax = plt.subplots()
-        obj.h.roms.plot.pcolormesh(geo=True, ax=ax, vmin=0, cmap='YlGn')
-        cmap = plt.matplotlib.colors.ListedColormap(
-            [land_color, sea_color, ice_color], name='land/sea/ice')
-        obj.mask.roms.plot.pcolormesh(geo=True, ax=ax,
-                                      vmin=0, vmax=2, cmap=cmap,
-                                      add_colorbar=False)
-        fig.tight_layout()
-
-        plt.show()
