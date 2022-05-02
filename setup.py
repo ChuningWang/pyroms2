@@ -79,10 +79,10 @@ setup(
         "Topic :: Libraries",
     ],
 
-    python_requires=">=3.9",
+    python_requires=">=3.8",
     install_requires=["xesmf >= 0.6.0",
                       "cartopy >= 0.20.0",
-                      "xgcm >= 0.6.0",
+                      "xgcm >= 0.5.0",
                       "netcdf4 >= 1.5.5",
                      ],
     setup_requires=[],

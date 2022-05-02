@@ -15,7 +15,7 @@ Recent development has been done in Python environments managed by [Conda].
 However pyROMS2 itself cannot yet be installed with Conda.
 
 If you are starting from scratch, we recommend that you install [Anaconda] or [Miniconda]
-and create a Python 3 environment (as of March 2022, version 3.9 is your best bet).
+and create a Python 3 environment (as of March 2022, version 3.8 is your best bet).
 You should also consider making conda-forge your default channel. See the [conda-forge tips and tricks] page.
 
 If you don't want to use Conda, that's fine, but you will have to do more of the work yourself.
@@ -24,7 +24,7 @@ If you don't want to use Conda, that's fine, but you will have to do more of the
 
 The following are required and are all available through [Conda-Forge].
 
-  * Python >= 3.9 (Python 3.9 currently recommended for new environments)
+  * Python >= 3.8 (Python 3.8 currently recommended for new environments)
   * [netcdf4]
   * [xESMF]
     * [scipy]
@@ -62,7 +62,7 @@ First, install miniconda. Then, we recommend creating a new environment and inst
 
 ```bash
 # Create a conda environment for pyROMS2
-$ conda create -n pyroms_env python=3.9
+$ conda create -n pyroms_env python=3.8
 $ conda activate pyroms_env
 $ conda install -c conda-forge xesmf
 $ conda install -c conda-forge cartopy
@@ -76,7 +76,7 @@ To clone a copy of the source and install the pyROMS packages, you can use the f
 # Install pyROMS2
 $ cd /path/to/install
 $ git clone https://github.com/ChuningWang/pyroms2.git
-$ pip install -e .
+$ pip install -e ./pyroms2
 ```
 
 An [editable-mode](https://pip.pypa.io/en/stable/reference/pip_install/#editable-installs)
