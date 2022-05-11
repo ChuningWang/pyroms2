@@ -45,7 +45,7 @@ import numpy as np
 from scipy.optimize import linprog
 from scipy.sparse import coo_matrix
 from xarray import DataArray
-from . import roughness0
+from . import util
 from . import smoothing
 
 
@@ -130,7 +130,7 @@ def LP_smoothing_rx0(MSK, Hobs, rx0max, SignConst=0, AmpConst=1.e5,
 
     Hnew = Hobs.copy()
     Hnew[MSK == 1] = Hobs[MSK == 1] + hcorr[:TotalNbVert]
-    MaxRx0 = roughness0(Hnew, MSK).max()
+    MaxRx0 = util.roughness0(Hnew, MSK).max()
     if verbose:
         print('rx0max = ', rx0max, '  MaxRx0 = ', MaxRx0)
 
@@ -232,9 +232,8 @@ def LP_smoothing_rx0_heuristic(MSK, Hobs, rx0max, SignConst=0, AmpConst=1.e5):
                              verbose=False)
         Hnew[K] = HnewI[K]
 
+    MaxRx0 = util.roughness0(Hnew, MSK).max()
     print('Final obtained bathymetry')
-    RMat = roughness0(Hnew, MSK)
-    MaxRx0 = RMat.max()
     print('rx0max = ', rx0max, '  MaxRx0 = ', MaxRx0)
 
     if use_xarray:

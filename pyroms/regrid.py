@@ -90,6 +90,8 @@ def make_ini(dsi: xr.DataArray,
 
     fh = nc.Dataset(filename, 'a')
     fh.variables['ocean_time'][:] = 0
+    if 'units' in dsi.ocean_time.attrs:
+        fh.variables['ocean_time'].units = dsi.ocean_time.attrs['units']
 
     if vars_in is not None:
         if 'salt' in vars_out:
@@ -304,6 +306,8 @@ def make_bry(dsi: xr.DataArray,
     pyroms.io.nc_create_roms_bdry_file(filename, grd)
     fh = nc.Dataset(filename, 'a')
     fh.variables['ocean_time'][:] = dsi.ocean_time
+    if 'units' in dsi.ocean_time.attrs:
+        fh.variables['ocean_time'].units = dsi.ocean_time.attrs['units']
 
     # Generate dict to store boundary Xarrays.
     dsi_bry = {}

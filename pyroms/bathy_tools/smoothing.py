@@ -13,7 +13,7 @@ http://drobilica.irb.hr/~mathieu/Bathymetry/index.html
 
 import numpy as np
 from xarray import DataArray
-from . import roughness0
+from . import util
 
 
 def smoothing_Positive_rx0(MSK, Hobs, rx0max):
@@ -432,7 +432,7 @@ def smoothing_Laplacian_rx0(MSK, Hobs, rx0max):
     Iter = 1
     NumberDones = np.zeros((eta_rho, xi_rho))
     while(True):
-        RoughMat = roughness0(RetBathy, MSK)
+        RoughMat = util.roughness0(RetBathy, MSK)
         Kbefore = np.where(RoughMat > rx0max)
         nbPtBefore = np.size(Kbefore, 1)
         realR = RoughMat.max()
@@ -472,7 +472,7 @@ def smoothing_Laplacian_rx0(MSK, Hobs, rx0max):
 
         NumberDones = NumberDones + AdditionalDone
         RetBathy = RetBathy + TheCorrect
-        NewRoughMat = roughness0(RetBathy, MSK)
+        NewRoughMat = util.roughness0(RetBathy, MSK)
         Kafter = np.where(NewRoughMat > rx0max)
         nbPtAfter = np.size(Kafter, 1)
         TheProd = (RoughMat > rx0max) * (NewRoughMat > rx0max)
