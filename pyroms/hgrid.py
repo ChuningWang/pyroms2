@@ -1015,9 +1015,9 @@ class BoundaryInteractor:
 
     def _on_draw(self, event):
         """
-        Update boundary vertices.
+        Update boundary vertices when firstly drawn.
         """
-        self._background = self._canvas.copy_from_bbox(self._ax.bbox)
+        self._bbox = self._canvas.copy_from_bbox(self._ax.bbox)
         self._ax.draw_artist(self._line)
         self._ax.draw_artist(self._poly)
         self._ax.draw_artist(self._pline)
@@ -1074,7 +1074,7 @@ class BoundaryInteractor:
         self._line.set_data(zip(*self._poly.xy[:-1]))
         self._update_beta_lines()
 
-        self._canvas.restore_region(self._background)
+        self._canvas.restore_region(self._bbox)
         self._ax.draw_artist(self._poly)
         self._ax.draw_artist(self._pline)
         self._ax.draw_artist(self._mline)
@@ -1177,7 +1177,8 @@ class BoundaryInteractor:
             return
 
         self._update_beta_lines()
-        if self._line.stale or self._pline.stale or self._mline.stale or \
+        if self._line.stale or \
+           self._pline.stale or self._mline.stale or \
            self._zline.stale or self._sline.stale:
             self._canvas.draw_idle()
 
@@ -2080,7 +2081,7 @@ class GetPositionFromMap(EditMask):
             return j, i, x, y
 
     def _on_draw(self, event):
-        self._background = self._canvas.copy_from_bbox(self._ax.bbox)
+        self._bbox = self._canvas.copy_from_bbox(self._ax.bbox)
         self._ax.draw_artist(self._line)
         return
 
@@ -2195,7 +2196,7 @@ class GetPositionFromMap(EditMask):
         xy[self._ind] = event.xdata, event.ydata
         self._line.set_data(xy[:, 0], xy[:, 1])
 
-        self._canvas.restore_region(self._background)
+        self._canvas.restore_region(self._bbox)
         self._ax.draw_artist(self._line)
         self._canvas.blit(self._ax.bbox)
         return

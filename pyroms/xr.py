@@ -84,6 +84,11 @@ def _calc_z(h: DataArray, zice: DataArray, zeta: DataArray,
     elif Vtransform == 2:
         z0 = (hc*s + (h-zice)*Cs) / (hc+h-zice)
         z = zeta + (zeta+h-zice)*z0 - zice
+    if 'ocean_time' in zeta.dims:
+        dims = ('ocean_time', ) + s.dims + zeta.dims[1:]
+    else:
+        dims = s.dims + zeta.dims
+    z = z.transpose(*dims)
     return z
 
 
@@ -449,6 +454,12 @@ class RomsDataArrayAccessor(RomsAccessor):
             self._pos = _find_pos(obj)
         else:
             self._pos = ''
+        if 's_rho' in obj.dims:
+            self._vpos = '_rho'
+        elif 's_w' in obj.dims:
+            self._vpos = '_w'
+        else:
+            self._vpos = None
 
     def interp(self, lon, lat):
         """
@@ -586,9 +597,35 @@ class RomsDataArrayAccessor(RomsAccessor):
     @property
     def s(self):
         if 's_rho' in self._obj.dims:
-            return 's_rho'
+            return self._obj.s_rho
         elif 's_w' in self._obj.dims:
-            return 's_w'
+            return self._obj.s_w
+        else:
+            return None
+
+    @property
+    def xi(self):
+        if 'xi_rho' in self._obj.dims:
+            return self._obj.xi_rho
+        elif 'xi_u' in self._obj.dims:
+            return self._obj.xi_u
+        elif 'xi_v' in self._obj.dims:
+            return self._obj.xi_v
+        elif 'xi_psi' in self._obj.dims:
+            return self._obj.xi_psi
+        else:
+            return None
+
+    @property
+    def eta(self):
+        if 'eta_rho' in self._obj.dims:
+            return self._obj.eta_rho
+        elif 'eta_u' in self._obj.dims:
+            return self._obj.eta_u
+        elif 'eta_v' in self._obj.dims:
+            return self._obj.eta_v
+        elif 'eta_psi' in self._obj.dims:
+            return self._obj.eta_psi
         else:
             return None
 
