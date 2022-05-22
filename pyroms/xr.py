@@ -7,7 +7,7 @@ from xgcm import Grid
 import matplotlib.pyplot as plt
 
 import pyproj
-import pyroms
+from . import grid, hgrid, vgrid
 
 
 def _find_pos(obj) -> str:
@@ -28,6 +28,8 @@ def _find_pos(obj) -> str:
         pos = '_u'
     elif 'eta_v' in obj.dims or 'xi_v' in obj.dims:
         pos = '_v'
+    elif 'eta_vert' in obj.dims or 'xi_vert' in obj.dims:
+        pos = '_vert'
 
     if pos is None:
         raise ValueError('Unknown coordinate position (rho/psi/u/v).')
@@ -65,9 +67,9 @@ def _set_hzz(obj, pos) -> (DataArray, DataArray, DataArray):
     return h, zice, zeta
 
 
-def _calc_z(h: DataArray, zice: DataArray, zeta: DataArray,
-            s: DataArray, Cs: DataArray,
-            hc: float, Vtransform: int) -> DataArray:
+def _set_z(h: DataArray, zice: DataArray, zeta: DataArray,
+           s: DataArray, Cs: DataArray,
+           hc: float, Vtransform: int) -> DataArray:
     """
     Calculate grid z-coord depth given water depth (h), iceshelf depth (zice),
     sea surface (zeta), and vertical grid transformation parameters.
@@ -121,6 +123,20 @@ class RomsAccessor:
         if 's_rho' in self._obj.coords:
             self._obj = self._obj.assign_coords(dict(s_r=self._obj.s_rho))
 
+    def _calc_z(self, hpos, vpos):
+        if vpos is None:
+            return
+        if '_z' + vpos + hpos not in self._obj.coords:
+            h, zice, zeta = _set_hzz(self._obj, hpos)
+            z = _set_z(h, zice, zeta,
+                       self._obj['s' + vpos], self._obj['Cs' + vpos],
+                       self._obj.hc, self._obj.Vtransform)
+            z.attrs = dict(
+                long_name='z' + vpos + ' at ' + hpos[1:].upper() + '-points',
+                units='meter')
+            self._obj = self._obj.assign_coords({'_z' + vpos + hpos: z})
+        return self._obj['_z' + vpos + hpos]
+
     def set_locs(self, lon, lat):
         """
         Put lon/lat and x/y coords in a DataArray given lon, lat as
@@ -159,21 +175,6 @@ class RomsAccessor:
                 elif self._obj.coords[lon].min() < 0.:
                     self._obj.coords[lon] = self._obj[lon] % 360
                     self._obj[lon].attrs = attrs
-
-    def _calc_z(self, hpos, vpos):
-        if vpos is None:
-            return
-        if '_z' + vpos + hpos not in self._obj.coords:
-            h, zice, zeta = _set_hzz(self._obj, hpos)
-            z = _calc_z(h, zice, zeta,
-                        self._obj['s' + vpos],
-                        self._obj['Cs' + vpos],
-                        self._obj.hc, self._obj.Vtransform)
-            z.attrs = dict(
-                long_name='z' + vpos + ' at ' + hpos[1:].upper() + '-points',
-                units='meter')
-            self._obj = self._obj.assign_coords({'_z' + vpos + hpos: z})
-        return self._obj['_z' + vpos + hpos]
 
     @property
     def center(self):
@@ -303,6 +304,7 @@ class RomsDatasetAccessor(RomsAccessor):
     z_w_v = property(lambda self: self._calc_z('_v', '_w'))
     z_r = property(lambda self: self._calc_z('', '_r'))
     z_w = property(lambda self: self._calc_z('', '_w'))
+    z = property(lambda self: self.z_r)
 
     # Other commonly used property decorators
     xi = property(lambda self: self._obj['xi_rho'])
@@ -603,9 +605,9 @@ class RomsDataArrayAccessor(RomsAccessor):
         ds = roms.transform(z)
         """
         z = DataArray(-np.abs(z), dims='Z')
-        grid = Grid(self._obj, coords={'S': {'center': self.s}},
-                    periodic=False)
-        ds = grid.transform(self._obj, 'S', z, target_data=self.z)
+        grd = Grid(self._obj, coords={'S': {'center': self.s}},
+                   periodic=False)
+        ds = grd.transform(self._obj, 'S', z, target_data=self.z)
         return ds
 
     # Depth-related decorator properties
@@ -794,8 +796,8 @@ def open_dataset(filename, grid_filename=None, interp_rho=False, **kwargs):
     """
     ds = xr.open_dataset(filename, **kwargs)
     if grid_filename is not None:
-        grd = pyroms.grid.get_ROMS_grid(grid_file=grid_filename,
-                                        hist_file=filename)
+        grd = grid.get_ROMS_grid(grid_file=grid_filename,
+                                 hist_file=filename)
         if 'zeta' in ds:
             grd.vgrid.zeta = ds.zeta
         return RDataset(ds, grd, interp_rho=interp_rho)
@@ -841,7 +843,7 @@ class RDataset(Dataset):
             use_grid = True
         else:
             for i in args:
-                if isinstance(i, pyroms.grid.ROMSGrid):
+                if isinstance(i, grid.ROMSGrid):
                     self._grid = i
                     use_grid = True
 
@@ -881,11 +883,11 @@ class RDataset(Dataset):
             if 'x_rho' in self:
                 self.coords['_spherical'] = False
                 # Add coords to exsisting CGrid.
-                x, y = pyroms.hgrid.rho_to_vert(
+                x, y = hgrid.rho_to_vert(
                     self.x_rho, self.y_rho, self.pm, self.pn, self.angle)
                 self.coords['x_vert'] = (['eta_vert', 'xi_vert'], x)
                 self.coords['y_vert'] = (['eta_vert', 'xi_vert'], y)
-                hgrid = pyroms.hgrid.CGrid(x, y)
+                hgrd = hgrid.CGrid(x, y)
             else:
                 self.coords['_spherical'] = True
                 # Construct a temporary Geo CGrid.
@@ -910,7 +912,7 @@ class RDataset(Dataset):
                 self.coords['y_v'] = (['eta_v', 'xi_v'], y)
 
                 # vert coords
-                lon, lat = pyroms.hgrid.rho_to_vert_geo(
+                lon, lat = hgrid.rho_to_vert_geo(
                     self.lon_rho.data, self.lat_rho.data,
                     self.lon_psi.data, self.lat_psi.data,
                     proj=proj)
@@ -920,20 +922,20 @@ class RDataset(Dataset):
                 self.coords['x_vert'] = (['eta_vert', 'xi_vert'], x)
                 self.coords['y_vert'] = (['eta_vert', 'xi_vert'], y)
 
-                hgrid = pyroms.hgrid.CGridGeo(lon, lat, proj)
+                hgrd = hgrid.CGridGeo(lon, lat, proj)
 
-            vgrid = pyroms.vgrid.SCoord(
+            vgrd = vgrid.SCoord(
                 self.h.data, self.theta_b.data,
                 self.theta_s.data, self.Tcline.data,
                 self.dims['s_rho'],
                 self.Vtransform.item(), self.Vstretching.item())
             if 'zeta' in self:
-                vgrid.zeta = self.zeta
+                vgrd.zeta = self.zeta
             if 'zice' in self:
-                vgrid.zice = self.zice
+                vgrd.zice = self.zice
 
-            self._grid = pyroms.grid.ROMSGrid(
-                'Generated by pyroms.xr', hgrid, vgrid)
+            self._grid = grid.ROMSGrid(
+                'Generated by pyroms.xr', hgrd, vgrd)
 
         # ---------------------------------------------------------------
         # Remake basic coordinates for easy interpolation
