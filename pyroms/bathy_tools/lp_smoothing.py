@@ -118,7 +118,7 @@ def LP_smoothing_rx0(MSK, Hobs, rx0max, SignConst=0, AmpConst=1.e5,
     jList = jList.astype(int)
 
     # Build the sparse matrix and solver
-    shp = (int(len(jList)/2), 2*TotalNbVert)
+    shp = (len(Constant), 2*TotalNbVert)
     mtx = coo_matrix((sList, (iList-1, jList-1)), shape=shp)
     print('Solver Matrix Size, %d5, %d5' % shp)
     solver = linprog(c=ObjectiveFct, A_ub=mtx, b_ub=Constant,

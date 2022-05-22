@@ -118,6 +118,8 @@ class RomsAccessor:
 
     def __init__(self, obj):
         self._obj = obj
+        if 's_r' in self._obj.coords:
+            self._obj = self._obj.assign_coords(dict(s_r=self._obj.s_rho))
 
     def set_locs(self, lon, lat):
         """
@@ -136,10 +138,11 @@ class RomsAccessor:
         ds_locs['x'] = DataArray(x, dims=('track'))
         ds_locs['y'] = DataArray(y, dims=('track'))
 
-        # Calculate distance from lon[0]/lat[0]
-        ds_locs.coords['distance'] = xr.zeros_like(ds_locs['x'])
+        # Assign coordiantes and calculate distance from lon[0]/lat[0]
         dis = np.hypot(x[1:] - x[:-1], y[1:] - y[:-1]).cumsum()
-        ds_locs.distance.data[1:] = dis
+        dis = np.concatenate((np.array([0]), dis))
+        ds_locs = ds_locs.assign_coords(track=np.arange(len(lon)))
+        ds_locs = ds_locs.assign_coords(distance=('track', dis))
         return ds_locs
 
     def longitude_wrap(self):
@@ -156,6 +159,21 @@ class RomsAccessor:
                 elif self._obj.coords[lon].min() < 0.:
                     self._obj.coords[lon] = self._obj[lon] % 360
                     self._obj[lon].attrs = attrs
+
+    def _calc_z(self, hpos, vpos):
+        if vpos is None:
+            return
+        if '_z' + vpos + hpos not in self._obj.coords:
+            h, zice, zeta = _set_hzz(self._obj, hpos)
+            z = _calc_z(h, zice, zeta,
+                        self._obj['s' + vpos],
+                        self._obj['Cs' + vpos],
+                        self._obj.hc, self._obj.Vtransform)
+            z.attrs = dict(
+                long_name='z' + vpos + ' at ' + hpos[1:].upper() + '-points',
+                units='meter')
+            self._obj = self._obj.assign_coords({'_z' + vpos + hpos: z})
+        return self._obj['_z' + vpos + hpos]
 
     @property
     def center(self):
@@ -201,9 +219,11 @@ class RomsDatasetAccessor(RomsAccessor):
             pos.append('_u')
         if 'eta_v' in self._obj.dims or 'xi_v' in self._obj.dims:
             pos.append('_v')
+        if 'eta_vert' in self._obj.dims or 'xi_vert' in self._obj.dims:
+            pos.append('_vert')
 
         if len(pos) == 0:
-            raise ValueError('Unknown coordinate position (rho/psi/u/v).')
+            raise ValueError('Unknown coordinate position (rho/psi/u/v/vert).')
         return pos
 
     def interp(self, lon, lat):
@@ -219,12 +239,13 @@ class RomsDatasetAccessor(RomsAccessor):
         ds_locs = self.set_locs(lon, lat)
 
         # Calculate disctance array and find the integer part of coordiantes.
-        xdis = self._obj['x_rho'] - ds_locs['x']
-        ydis = self._obj['y_rho'] - ds_locs['y']
+        xdis = self.x - ds_locs['x']
+        ydis = self.x - ds_locs['y']
         dis_min = np.hypot(xdis, ydis).argmin(dim=('eta_rho', 'xi_rho'))
+
         etav, xiv = dis_min['eta_rho'], dis_min['xi_rho']
         # eta0, xi0 are the coords of left bottom corner.
-        eta0, xi0 = self._obj['eta_vert'].data[0], self._obj['xi_vert'].data[0]
+        eta0, xi0 = self._obj.eta_vert.data[0], self._obj.xi_vert.data[0]
 
         # Calculate the fractional part of coordinates and add to integer part.
         eta_loc, xi_loc = [], []
@@ -250,24 +271,49 @@ class RomsDatasetAccessor(RomsAccessor):
             interp_coords['eta' + pos] = ds_locs.eta
             interp_coords['xi' + pos] = ds_locs.xi
         ds = self._obj.interp(interp_coords)
-        # ds = self._obj.interp(eta_vert=ds_locs.eta, xi_vert=ds_locs.xi,
-        #                       eta_rho=ds_locs.eta, xi_rho=ds_locs.xi,
-        #                       eta_psi=ds_locs.eta, xi_psi=ds_locs.xi,
-        #                       eta_u=ds_locs.eta, xi_u=ds_locs.xi,
-        #                       eta_v=ds_locs.eta, xi_v=ds_locs.xi)
 
-        # Set new coordinate - distance and station
-        ds.coords['distance'] = ds_locs.distance
+        # Also update coordinates
+        for var in ['lat', 'lon', 'x', 'y', 'mask']:
+            ds.coords[var] = ds[var + '_rho']
+        ds.coords['eta'] = ds_locs.eta
+        ds.coords['xi'] = ds_locs.xi
+
+        # Clean up coordiantes
+        drop_coords = []
+        for coord in ds.coords:
+            if coord != 's_rho' and \
+                    ('_rho' in coord or '_u' in coord or '_v' in coord or
+                     '_psi' in coord or '_vert' in coord):
+                drop_coords.append(coord)
+        for coord in drop_coords:
+            ds.__delitem__(coord)
 
         return ds
 
-    def transfrom(self, z):
+    def transform(self, z):
         # TODO
         return
 
-    @property
-    def plot(self):
-        return _RomsDatasetPlot(self._obj)
+    # Depth related property decorators
+    z_r_rho = property(lambda self: self._calc_z('_rho', '_r'))
+    z_w_rho = property(lambda self: self._calc_z('_rho', '_w'))
+    z_r_u = property(lambda self: self._calc_z('_u', '_r'))
+    z_w_u = property(lambda self: self._calc_z('_u', '_w'))
+    z_r_v = property(lambda self: self._calc_z('_v', '_r'))
+    z_w_v = property(lambda self: self._calc_z('_v', '_w'))
+    z_r = property(lambda self: self._calc_z('', '_r'))
+    z_w = property(lambda self: self._calc_z('', '_w'))
+
+    # Other commonly used property decorators
+    xi = property(lambda self: self._obj['xi_rho'])
+    eta = property(lambda self: self._obj['eta_rho'])
+    x = property(lambda self: self._obj['x_rho'])
+    y = property(lambda self: self._obj['y_rho'])
+    lon = property(lambda self: self._obj['lon_rho'])
+    lat = property(lambda self: self._obj['lat_rho'])
+
+    # Linker of the plotting function
+    plot = property(lambda self: _RomsDatasetPlot(self._obj, self._pos))
 
 
 class _RomsDatasetPlot:
@@ -455,7 +501,7 @@ class RomsDataArrayAccessor(RomsAccessor):
         else:
             self._pos = ''
         if 's_rho' in obj.dims:
-            self._vpos = '_rho'
+            self._vpos = '_r'
         elif 's_w' in obj.dims:
             self._vpos = '_w'
         else:
@@ -468,24 +514,20 @@ class RomsDataArrayAccessor(RomsAccessor):
         """
         ds_locs = self.set_locs(lon, lat)
 
-        etan = self._obj.sizes['eta' + self._pos]
-        xin = self._obj.sizes['xi' + self._pos]
+        # Calculate disctance array and find the integer part of coordiantes.
+        xdis = self.x - ds_locs['x']
+        ydis = self.y - ds_locs['y']
+        dis = np.hypot(xdis, ydis).argmin(dim=(self.eta_nam, self.xi_nam))
 
-        xdis = self._obj['x' + self._pos] - ds_locs['x']
-        ydis = self._obj['y' + self._pos] - ds_locs['y']
-        dis = np.hypot(xdis, ydis)
-        dis = dis.argmin(dim=('eta' + self._pos, 'xi' + self._pos))
+        etav, xiv = dis[self.eta_nam], dis[self.xi_nam]
+        eta0, xi0 = self.eta.data[0], self.xi.data[0]
 
-        eta0 = self._obj['eta' + self._pos].data[0]
-        xi0 = self._obj['xi' + self._pos].data[0]
-        etav, xiv = dis['eta' + self._pos], dis['xi' + self._pos]
-
-        etav = etav.where(etav < etan-2, etan-2)
-        xiv = xiv.where(xiv < xin-2, xin-2)
+        etaN, xiN = self.eta.size, self.xi.size
+        etav = etav.where(etav < etaN-2, etaN-2)
+        xiv = xiv.where(xiv < xiN-2, xiN-2)
 
         eta_loc, xi_loc = [], []
-        xv = self._obj['x' + self._pos].data
-        yv = self._obj['y' + self._pos].data
+        xv, yv = self.x.data, self.y.data
 
         for ei, xi, xx, yy in \
                 zip(etav.data, xiv.data, ds_locs.x.data, ds_locs.y.data):
@@ -501,9 +543,20 @@ class RomsDataArrayAccessor(RomsAccessor):
         ds_locs['eta'] = DataArray(eta_loc, dims=('track'))
         ds_locs['xi'] = DataArray(xi_loc, dims=('track'))
 
-        da = self._obj.interp({'eta' + self._pos: ds_locs.eta,
-                               'xi' + self._pos: ds_locs.xi})
-        da.coords['distance'] = ds_locs.distance
+        da = self._obj.interp({self.eta_nam: ds_locs.eta,
+                               self.xi_nam: ds_locs.xi})
+
+        # Clean up coordiantes
+        drop_coords = []
+        for coord in da.coords:
+            if coord != 's_rho' and self._pos in coord:
+                drop_coords.append(coord)
+        for coord in drop_coords:
+            new_name = coord.split(self._pos)[0]
+            if new_name not in da.coords:
+                da = da.rename({coord: new_name})
+            else:
+                da.__delitem__(coord)
 
         return da
 
@@ -555,95 +608,27 @@ class RomsDataArrayAccessor(RomsAccessor):
         ds = grid.transform(self._obj, 'S', z, target_data=self.z)
         return ds
 
-    @property
-    def z_r(self):
-        """
-        Calculate z at RHO-points.
-        """
+    # Depth-related decorator properties
+    z = property(lambda self: self._calc_z(self._pos, self._vpos))
 
-        if '_z_r' + self._pos not in self._obj.coords:
-            h, zice, zeta = _set_hzz(self._obj, self._pos)
-            self._obj.coords['_z_r' + self._pos] = _calc_z(
-                h, zice, zeta, self._obj.s_rho, self._obj.Cs_r,
-                self._obj.hc, self._obj.Vtransform)
-            self._obj.coords['_z_r' + self._pos].attrs = dict(
-                long_name='Depth at RHO-points', units='meter')
-        return self._obj['_z_r' + self._pos]
+    # Other commonly used property decorators
+    pos = property(lambda self: self._pos)
+    vpos = property(lambda self: self._vpos)
+    s_loc = property(lambda self: 's' + self._vpos)
+    xi_nam = property(lambda self: 'xi' + self._pos)
+    eta_nam = property(lambda self: 'eta' + self._pos)
+    s = property(lambda self: self._obj[self.s_loc])
+    xi = property(lambda self: self._obj[self.xi_nam])
+    eta = property(lambda self: self._obj[self.eta_nam])
+    x = property(lambda self: self._obj['x' + self._pos])
+    y = property(lambda self: self._obj['y' + self._pos])
+    lon = property(lambda self: self._obj['lon' + self._pos])
+    lat = property(lambda self: self._obj['lat' + self._pos])
+    h = property(lambda self: self._obj['h' + self._pos])
+    mask = property(lambda self: self._obj['mask' + self._pos])
 
-    @property
-    def z_w(self):
-        """
-        Calculate z at W-points.
-        """
-
-        if '_z_w' + self._pos not in self._obj.coords:
-            h, zice, zeta = _set_hzz(self._obj, self._pos)
-            self._obj.coords['_z_w' + self._pos] = _calc_z(
-                h, zice, zeta, self._obj.s_w, self._obj.Cs_w,
-                self._obj.hc, self._obj.Vtransform)
-            self._obj.coords['_z_w' + self._pos].attrs = dict(
-                long_name='Depth at W-points', units='meter')
-        return self._obj['_z_w' + self._pos]
-
-    @property
-    def z(self):
-        if 's_rho' in self._obj.dims:
-            return self.z_r
-        elif 's_w' in self._obj.dims:
-            return self.z_w
-        else:
-            return None
-
-    @property
-    def s(self):
-        if 's_rho' in self._obj.dims:
-            return self._obj.s_rho
-        elif 's_w' in self._obj.dims:
-            return self._obj.s_w
-        else:
-            return None
-
-    @property
-    def xi(self):
-        if 'xi_rho' in self._obj.dims:
-            return self._obj.xi_rho
-        elif 'xi_u' in self._obj.dims:
-            return self._obj.xi_u
-        elif 'xi_v' in self._obj.dims:
-            return self._obj.xi_v
-        elif 'xi_psi' in self._obj.dims:
-            return self._obj.xi_psi
-        else:
-            return None
-
-    @property
-    def eta(self):
-        if 'eta_rho' in self._obj.dims:
-            return self._obj.eta_rho
-        elif 'eta_u' in self._obj.dims:
-            return self._obj.eta_u
-        elif 'eta_v' in self._obj.dims:
-            return self._obj.eta_v
-        elif 'eta_psi' in self._obj.dims:
-            return self._obj.eta_psi
-        else:
-            return None
-
-    @property
-    def pos(self):
-        return self._pos
-
-    @property
-    def h(self):
-        return self._obj['h' + self._pos]
-
-    @property
-    def mask(self):
-        return self._obj['mask' + self._pos]
-
-    @property
-    def plot(self):
-        return _RomsDataArrayPlot(self._obj, self._pos)
+    # Linker of the plotting function
+    plot = property(lambda self: _RomsDataArrayPlot(self._obj, self._pos))
 
 
 class _RomsDataArrayPlot:
@@ -882,7 +867,7 @@ class RDataset(Dataset):
             # Merge dsg into dsr. Since some variables in dsg is determined
             # as coordinates, cannot use the internal xr.merge method.
             for var in dsg.variables:
-                if var not in self:
+                if var not in self and var not in self.coords:
                     self.coords[var] = dsg[var]
         else:
             # No grid file provided. Need to extract coords from ROMS file
@@ -1034,7 +1019,8 @@ class RDataset(Dataset):
         for var in self.data_vars:
             vdim = self[var].dims
             if 'ocean_time' not in self[var].dims:
-                if (len(vdim) > 0 and vdim != ('tracer', )) or \
+                if (len(vdim) > 0 and
+                    vdim != ('tracer', ) and 'boundary' not in vdim) or \
                    var in ['Vtransform', 'Vstretching',
                            'theta_s', 'theta_b', 'Tcline', 'hc']:
                     self.coords[var] = self[var]
