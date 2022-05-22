@@ -118,7 +118,7 @@ class RomsAccessor:
 
     def __init__(self, obj):
         self._obj = obj
-        if 's_r' in self._obj.coords:
+        if 's_rho' in self._obj.coords:
             self._obj = self._obj.assign_coords(dict(s_r=self._obj.s_rho))
 
     def set_locs(self, lon, lat):

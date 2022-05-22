@@ -165,9 +165,6 @@ class ROMSGrid(object):
         ds_grd.s_rho.attrs['long_name'] = 'S-coordinate at RHO-points'
         ds_grd.s_w.attrs['long_name'] = 'S-coordinate at W-points'
 
-        # Alias for s_rho
-        ds_grd = ds_grd.assign_coords(dict(s_r=ds_grd.s_rho))
-
         if self.hgrid.spherical:
             ds_grd.attrs['proj'] = self.hgrid.proj.crs.to_string()
             ds_grd.coords['lon_vert'] = (
