@@ -218,6 +218,27 @@ class ROMSGrid(object):
                     ['eta_rho', 'xi_rho'], self.hgrid.mask_is,
                     dict(long_name='mask of iceshelf on RHO-points'))
 
+        # Remake basic coordinates for easy interpolation
+        ds_grd.coords['eta_rho'] = np.arange(ds_grd.dims['eta_rho'])+0.5
+        ds_grd.coords['xi_rho'] = np.arange(ds_grd.dims['xi_rho'])+0.5
+        ds_grd.coords['eta_vert'] = range(ds_grd.dims['eta_rho']+1)
+        ds_grd.coords['xi_vert'] = range(ds_grd.dims['xi_rho']+1)
+        ds_grd.coords['eta_psi'] = range(ds_grd.dims['eta_psi'])
+        ds_grd.coords['xi_psi'] = range(ds_grd.dims['xi_psi'])
+        ds_grd.coords['eta_u'] = ds_grd.eta_rho.data.copy()
+        ds_grd.coords['xi_u'] = ds_grd.xi_psi.data.copy()
+        ds_grd.coords['eta_v'] = ds_grd.eta_psi.data.copy()
+        ds_grd.coords['xi_v'] = ds_grd.xi_rho.data.copy()
+
+        # Interpolate bathymetry (h/zice/etc) to vert vertices
+        ds_grd['h_vert'] = ds_grd.h.interp(
+            eta_rho=ds_grd.eta_vert, xi_rho=ds_grd.xi_vert,
+            kwargs=dict(fill_value='extrapolate'))
+        if 'zice' in ds_grd:
+            ds_grd['zice_vert'] = ds_grd.zice.interp(
+                eta_rho=ds_grd.eta_vert, xi_rho=ds_grd.xi_vert,
+                kwargs=dict(fill_value='extrapolate'))
+
         return ds_grd
 
     def get_position(self, **kwargs):
@@ -693,6 +714,8 @@ def get_ROMS_grid(grid_file, hist_file=None, gridid=None, zeta=None,
     # and gridfile info.  If hist_file and grid_file are defined, the
     # grid info will be extracted from those files and will able to be
     # accessed later by gridid
+    if gridid is None:
+        gridid = grid_file
     gridinfo = ROMSGridInfo(gridid, hist_file=hist_file, grid_file=grid_file)
     name = gridinfo.name
 

@@ -126,16 +126,14 @@ class RomsAccessor:
     def _calc_z(self, hpos, vpos):
         if vpos is None:
             return
-        if '_z' + vpos + hpos not in self._obj.coords:
-            h, zice, zeta = _set_hzz(self._obj, hpos)
-            z = _set_z(h, zice, zeta,
-                       self._obj['s' + vpos], self._obj['Cs' + vpos],
-                       self._obj.hc, self._obj.Vtransform)
-            z.attrs = dict(
-                long_name='z' + vpos + ' at ' + hpos[1:].upper() + '-points',
-                units='meter')
-            self._obj = self._obj.assign_coords({'_z' + vpos + hpos: z})
-        return self._obj['_z' + vpos + hpos]
+        h, zice, zeta = _set_hzz(self._obj, hpos)
+        z = _set_z(h, zice, zeta,
+                   self._obj['s' + vpos], self._obj['Cs' + vpos],
+                   self._obj.hc, self._obj.Vtransform)
+        z.attrs = dict(
+            long_name='z' + vpos + ' at ' + hpos[1:].upper() + '-points',
+            units='meter')
+        return z
 
     def set_locs(self, lon, lat):
         """
@@ -611,15 +609,33 @@ class RomsDataArrayAccessor(RomsAccessor):
         return ds
 
     # Depth-related decorator properties
-    z = property(lambda self: self._calc_z(self._pos, self._vpos))
+    @property
+    def z(self):
+        if '_z' + self._vpos + self._pos not in self._obj.coords:
+            z = self._calc_z(self._pos, self._vpos)
+            self._obj = self._obj.assign_coords(
+                {'_z' +  self._vpos + self._pos: z})
+        return self._obj['_z' +  self._vpos + self._pos]
+
+    @property
+    def s_r(self):
+        if self._vpos == '_r':
+            return self._obj['s_rho']
+        else:
+            return None
 
     # Other commonly used property decorators
     pos = property(lambda self: self._pos)
     vpos = property(lambda self: self._vpos)
-    s_loc = property(lambda self: 's' + self._vpos)
+    @property
+    def s_nam(self):
+        if self._vpos == '_r':
+            return 's_rho'
+        else:
+            return 's' + self._vpos
     xi_nam = property(lambda self: 'xi' + self._pos)
     eta_nam = property(lambda self: 'eta' + self._pos)
-    s = property(lambda self: self._obj[self.s_loc])
+    s = property(lambda self: self._obj[self.s_nam])
     xi = property(lambda self: self._obj[self.xi_nam])
     eta = property(lambda self: self._obj[self.eta_nam])
     x = property(lambda self: self._obj['x' + self._pos])
@@ -739,9 +755,9 @@ class _RomsDataArrayPlot:
 
             for k in kwargs:
                 if kwargs[k] == '_z_r' + self._pos:
-                    self._obj.roms.z_r
+                    self._obj.roms.z
                 elif kwargs[k] == '_z_w' + self._pos:
-                    self._obj.roms.z_w
+                    self._obj.roms.z
 
             # set colormap to RdBu_r
             if 'vmin' in kwargs and 'vmax' in kwargs:
