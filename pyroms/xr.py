@@ -126,14 +126,16 @@ class RomsAccessor:
     def _calc_z(self, hpos, vpos):
         if vpos is None:
             return
-        h, zice, zeta = _set_hzz(self._obj, hpos)
-        z = _set_z(h, zice, zeta,
-                   self._obj['s' + vpos], self._obj['Cs' + vpos],
-                   self._obj.hc, self._obj.Vtransform)
-        z.attrs = dict(
-            long_name='z' + vpos + ' at ' + hpos[1:].upper() + '-points',
-            units='meter')
-        return z
+        if '_z' + vpos + hpos not in self._obj.coords:
+            h, zice, zeta = _set_hzz(self._obj, hpos)
+            z = _set_z(h, zice, zeta,
+                       self._obj['s' + vpos], self._obj['Cs' + vpos],
+                       self._obj.hc, self._obj.Vtransform)
+            z.attrs = dict(
+                long_name='z' + vpos + ' at ' + hpos[1:].upper() + '-points',
+                units='meter')
+            self._obj = self._obj.assign_coords({'_z' + vpos + hpos: z})
+        return self._obj['_z' + vpos + hpos]
 
     def set_locs(self, lon, lat):
         """
@@ -609,13 +611,7 @@ class RomsDataArrayAccessor(RomsAccessor):
         return ds
 
     # Depth-related decorator properties
-    @property
-    def z(self):
-        if '_z' + self._vpos + self._pos not in self._obj.coords:
-            z = self._calc_z(self._pos, self._vpos)
-            self._obj = self._obj.assign_coords(
-                {'_z' +  self._vpos + self._pos: z})
-        return self._obj['_z' +  self._vpos + self._pos]
+    z = property(lambda self: self._calc_z(self._pos, self._vpos))
 
     @property
     def s_r(self):
@@ -758,6 +754,8 @@ class _RomsDataArrayPlot:
                     self._obj.roms.z
                 elif kwargs[k] == '_z_w' + self._pos:
                     self._obj.roms.z
+            import pdb
+            pdb.set_trace()
 
             # set colormap to RdBu_r
             if 'vmin' in kwargs and 'vmax' in kwargs:
