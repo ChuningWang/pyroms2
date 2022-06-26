@@ -69,7 +69,7 @@ def _set_hzz(obj, pos, clip_z=True) -> (DataArray, DataArray, DataArray):
     # Fetch h/zice/zeta.
     h = obj['h' + pos]
     h = h.where(~h.isnull(), 0)
-    if 'zice' in obj.coords:
+    if 'zice' + pos in obj.coords:
         zice = obj['zice' + pos]
         zice = zice.where(~zice.isnull(), 0)
     else:
@@ -166,14 +166,20 @@ class ROMSAccessor:
     def __init__(self, obj):
         self._obj = obj
 
-    def set_locs(self, lon, lat):
+    def set_locs(self, lon, lat, time=None):
         """
         Put lon/lat and x/y coords in a DataArray given lon, lat as
         tuple/list/ndarray.
 
-        ds_locs = roms.set_locs(lon, lat)
+        ds_locs = roms.set_locs(lon, lat, time=None)
+        Inputs:
+            lon, lat - 1-D list of longitude/latitude
+            time (optional) - 1-D list of time
+        Output:
+            ds_locs - interpolation coordinates.
         """
 
+        lon, lat = np.asarray(lon), np.asarray(lat)
         assert len(lon) == len(lat), 'lon/lat must have the same length.'
 
         # Pass in geographic information to a DataArray
@@ -184,6 +190,13 @@ class ROMSAccessor:
         x, y = proj(ds_locs['lon'], ds_locs['lat'])
         ds_locs['x'] = DataArray(x, dims=('track'))
         ds_locs['y'] = DataArray(y, dims=('track'))
+
+        if time is not None:
+            time = np.asarray(time)
+            if len(time) == len(lon):
+                ds_locs['ocean_time'] = DataArray(time, dims=('track'))
+            else:
+                ds_locs['ocean_time'] = DataArray(time, dims=('ocean_time'))
 
         # Assign coordiantes and calculate distance from lon[0]/lat[0]
         dis = np.hypot(x[1:] - x[:-1], y[1:] - y[:-1]).cumsum()
@@ -258,20 +271,21 @@ class ROMSDatasetAccessor(ROMSAccessor):
         if len(self._vpos) == 0:
             self._vpos = ['']
 
-    def interp(self, lon, lat):
+    def interp(self, lon, lat, time=None):
         """
         Horizontal interpolation method for ROMS Dataset.
 
-        ds = roms.interp(lon, lat)
+        ds = roms.interp(lon, lat, time=None)
         Inputs:
             lon, lat - 1-D list of longitude/latitude
+            time (optional) - 1-D list of time
         Output:
-            ds - interpolated dataset.
+            ds - interpolated Dataset.
         """
-        ds_locs = self.set_locs(lon, lat)
+        ds_locs = self.set_locs(lon, lat, time)
 
         # Calculate disctance array and find the integer part of coordiantes.
-        xdis, ydis = self.x - ds_locs['x'], self.x - ds_locs['y']
+        xdis, ydis = self.x - ds_locs['x'], self.y - ds_locs['y']
         dis_min = np.hypot(xdis, ydis).argmin(dim=('eta_rho', 'xi_rho'))
 
         # eta0, xi0 are the coords of left bottom corner.
@@ -300,6 +314,8 @@ class ROMSDatasetAccessor(ROMSAccessor):
         for pos in self._hpos:
             interp_coords['eta' + pos] = ds_locs.eta
             interp_coords['xi' + pos] = ds_locs.xi
+            if time is not None:
+                interp_coords['ocean_time'] = ds_locs.ocean_time
         ds = self._obj.interp(interp_coords)
 
         # Also update horizontal coordinates
@@ -411,7 +427,57 @@ class ROMSDatasetAccessor(ROMSAccessor):
             self._obj.coords[var] = _calc_z(self._obj, vpos, hpos)
         return self._obj.coords[var]
 
-    # Other commonly used property decorators
+    @property
+    def dz_rho(self):
+        if '_dz_rho' not in self._obj:
+            _dz = self.z_w_rho.diff(dim='s_w')
+            _dz = _dz.rename(s_w='s_rho').assign_coords(
+                s_rho=self._obj.s_rho)
+            self._obj['_dz_rho'] = _dz
+        return self._obj['_dz_rho']
+
+    @property
+    def dz_u(self):
+        if '_dz_u' not in self._obj:
+            _dz = self.z_w_u.diff(dim='s_w')
+            _dz = _dz.rename(s_w='s_rho').assign_coords(
+                s_rho=self._obj.s_rho)
+            self._obj['_dz_u'] = _dz
+        return self._obj['_dz_u']
+
+    @property
+    def dz_v(self):
+        if '_dz_v' not in self._obj:
+            _dz = self.z_w_v.diff(dim='s_w')
+            _dz = _dz.rename(s_w='s_rho').assign_coords(
+                s_rho=self._obj.s_rho)
+            self._obj['_dz_v'] = _dz
+        return self._obj['_dz_v']
+
+    @property
+    def dz(self):
+        hpos = self._hpos[0]
+        if hpos == '_rho':
+            return self.dz_rho
+        elif hpos == '_u':
+            return self.dz_u
+        elif hpos == '_v':
+            return self.dz_v
+        else:
+            if '_dz' not in self._obj:
+                _dz = self.z_w.diff(dim='s_w')
+                _dz = _dz.rename(s_w='s_rho').assign_coords(
+                    s_rho=self._obj.s_rho)
+                self._obj['_dz'] = _dz
+            return self._obj['_dz']
+
+    @property
+    def vol(self):
+        if '_vol' not in self._obj:
+            self._obj['_vol'] = self.dz_rho/(self._obj.pm*self._obj.pn)
+        return self._obj['_vol']
+
+    # Other commonly used alias
     xi = property(lambda self: self._obj['xi' + self._hpos[0]])
     eta = property(lambda self: self._obj['eta' + self._hpos[0]])
     x = property(lambda self: self._obj['x' + self._hpos[0]])
@@ -609,13 +675,18 @@ class ROMSDataArrayAccessor(ROMSAccessor):
         self._hpos = _find_hpos(obj)
         self._vpos = _find_vpos(obj)
 
-    def interp(self, lon, lat):
+    def interp(self, lon, lat, time=None):
         """
         Horizontal interpolation method for ROMS variable DataArray.
 
-        da = roms.interp(lon, lat)
+        da = roms.interp(lon, lat, time=None)
+        Inputs:
+            lon, lat - 1-D list of longitude/latitude
+            time (optional) - 1-D list of time
+        Output:
+            da - interpolated DataArray.
         """
-        ds_locs = self.set_locs(lon, lat)
+        ds_locs = self.set_locs(lon, lat, time)
 
         # Calculate disctance array and find the integer part of coordiantes.
         xdis = self.x - ds_locs['x']
@@ -645,9 +716,11 @@ class ROMSDataArrayAccessor(ROMSAccessor):
 
         ds_locs['eta'] = DataArray(eta_loc, dims=('track'))
         ds_locs['xi'] = DataArray(xi_loc, dims=('track'))
-
-        da = self._obj.interp({self.eta_nam: ds_locs.eta,
-                               self.xi_nam: ds_locs.xi})
+        interp_coords = {self.eta_nam: ds_locs.eta,
+                         self.xi_nam: ds_locs.xi}
+        if time is not None:
+            interp_coords['ocean_time'] = ds_locs.ocean_time
+        da = self._obj.interp(interp_coords)
 
         # Clean up coordiantes
         drop_coords = []
@@ -1124,6 +1197,8 @@ class RDataset(xr.Dataset):
                 self['zice_u'] = xr.zeros_like(self.h_u)
                 self['zice_v'] = xr.zeros_like(self.h_v)
 
+            if 'mask_rho' in self:
+                self['mask'] = self.mask_rho
             if 'mask_is' in self:
                 self['mask_is_u'] = self.mask_is.interp(
                     eta_rho=self.eta_u, xi_rho=self.xi_u)
@@ -1144,8 +1219,46 @@ class RDataset(xr.Dataset):
         # projection function for later use.
         for var in self.data_vars:
             proj4_init = self._grid.hgrid.proj.to_proj4()
-            self[var].attrs['proj4_init'] = proj4_init
         self.attrs['proj4_init'] = proj4_init
+
+        # When Dataset is loaded with open_mfdataset, clean some variables
+        # by averaging over ocean_time.
+        if self.ntimes.dims == ('ocean_time', ):
+            for var in self.coords:
+                vdim = self[var].dims
+                if var != 'ocean_time' and 'ocean_time' in vdim:
+                    if vdim == ('ocean_time', ) or \
+                       vdim == ('ocean_time', 'tracer', ) or \
+                       vdim == ('ocean_time', 'boundary', ) or \
+                       vdim == ('ocean_time', 'boundary', 'tracer', ) or \
+                       vdim == ('ocean_time', 's_rho', ) or \
+                       vdim == ('ocean_time', 's_w', ) or \
+                       var in ['h', 'h_rho', 'h_u', 'h_v',
+                               'h_psi', 'h_vert',
+                               'zice', 'zice_rho', 'zice_u', 'zice_v',
+                               'zice_psi', 'zice_vert',
+                               'mask', 'mask_rho', 'mask_u', 'mask_v',
+                               'mask_psi', 'mask_vert',
+                               'f', 'angle']:
+                        self.coords[var] = self[var].isel(ocean_time=0)
+
+            for var in self:
+                vdim = self[var].dims
+                if var != 'ocean_time' and 'ocean_time' in vdim:
+                    if vdim == ('ocean_time', ) or \
+                       vdim == ('ocean_time', 'tracer', ) or \
+                       vdim == ('ocean_time', 'boundary', ) or \
+                       vdim == ('ocean_time', 'boundary', 'tracer', ) or \
+                       vdim == ('ocean_time', 's_rho', ) or \
+                       vdim == ('ocean_time', 's_w', ) or \
+                       var in ['h', 'h_rho', 'h_u', 'h_v',
+                               'h_psi', 'h_vert',
+                               'zice', 'zice_rho', 'zice_u', 'zice_v',
+                               'zice_psi', 'zice_vert',
+                               'mask', 'mask_rho', 'mask_u', 'mask_v',
+                               'mask_psi', 'mask_vert',
+                               'f', 'angle']:
+                        self[var] = self[var].isel(ocean_time=0)
 
         # Transform some data variables to coordinates and some other
         # model constants to attributes.
@@ -1153,8 +1266,9 @@ class RDataset(xr.Dataset):
         for var in self.data_vars:
             vdim = self[var].dims
             if 'ocean_time' not in self[var].dims:
-                if (len(vdim) > 0 and
-                    vdim != ('tracer', ) and 'boundary' not in vdim) or \
+                # if (len(vdim) > 0 and
+                #     vdim != ('tracer', ) and 'boundary' not in vdim) or \
+                if (len(vdim) > 0) or \
                    var in ['Vtransform', 'Vstretching',
                            'theta_s', 'theta_b', 'Tcline', 'hc']:
                     self.coords[var] = self[var]
