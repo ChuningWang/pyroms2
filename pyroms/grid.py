@@ -644,6 +644,11 @@ def get_ROMS_vgrid(gridid, zeta=None):
     except Exception:
         raise ValueError('NetCDF file must contain the bathymetry h')
 
+    if 'hraw' in fh.variables.keys():
+        hraw = fh.variables['hraw'][:]
+    else:
+        hraw = None
+
     if 'zice' in fh.variables.keys():
         zice = fh.variables['zice'][:]
         if 'ziceraw' in fh.variables.keys():
@@ -653,11 +658,6 @@ def get_ROMS_vgrid(gridid, zeta=None):
     else:
         zice = None
         ziceraw = None
-
-    if 'hraw' in fh.variables.keys():
-        hraw = fh.variables['hraw'][:]
-    else:
-        hraw = None
 
     if gridinfo.grdtype == 'roms':
         Vtrans = gridinfo.Vtrans
@@ -803,14 +803,6 @@ def write_ROMS_grid(grd, filename='roms_grd.nc'):
 
     io.nc_write_var(fh, grd.vgrid.h, 'h', ('eta_rho', 'xi_rho'),
                     'bathymetry at RHO-points', 'meter')
-    if hasattr(grd.vgrid, 'zice') is True:
-        io.nc_write_var(fh, grd.vgrid.zice, 'zice', ('eta_rho', 'xi_rho'),
-                        'iceshelf depth at RHO-points', 'meter')
-        if hasattr(grd.vgrid, 'ziceraw') is True:
-            io.nc_write_var(fh, grd.vgrid.ziceraw, 'ziceraw',
-                            ('eta_rho', 'xi_rho'),
-                            'raw iceshelf depth at RHO-points', 'meter')
-
     # ensure that we have a bath dependancy for hraw
     if grd.vgrid.hraw is None:
         grd.vgrid.hraw = grd.vgrid.h
@@ -822,6 +814,15 @@ def write_ROMS_grid(grd, filename='roms_grd.nc'):
         hraw = grd.vgrid.hraw
     io.nc_write_var(fh, hraw, 'hraw', ('bath', 'eta_rho', 'xi_rho'),
                     'raw bathymetry at RHO-points', 'meter')
+
+    if hasattr(grd.vgrid, 'zice') is True:
+        io.nc_write_var(fh, grd.vgrid.zice, 'zice', ('eta_rho', 'xi_rho'),
+                        'iceshelf depth at RHO-points', 'meter')
+        if hasattr(grd.vgrid, 'ziceraw') is True:
+            io.nc_write_var(fh, grd.vgrid.ziceraw, 'ziceraw',
+                            ('eta_rho', 'xi_rho'),
+                            'raw iceshelf depth at RHO-points', 'meter')
+
     io.nc_write_var(fh, grd.hgrid.f, 'f', ('eta_rho', 'xi_rho'),
                     'Coriolis parameter at RHO-points', 'second-1')
     io.nc_write_var(fh, 1./grd.hgrid.dx, 'pm', ('eta_rho', 'xi_rho'),

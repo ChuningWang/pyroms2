@@ -743,7 +743,8 @@ class ROMSDataArrayAccessor(ROMSAccessor):
         da = roms.transform(z)
         """
         z = DataArray(-np.abs(z), dims='Z')
-        grd = Grid(self._obj, coords={'S': {'center': self.s}},
+        ds = self.z.to_dataset(name='z')
+        grd = Grid(ds, coords={'S': {'center': self.s_nam}},
                    periodic=False)
         da = grd.transform(self._obj, 'S', z, target_data=self.z)
         return da
@@ -1010,6 +1011,34 @@ def open_dataset(filename, grid_filename=None, interp_rho=False, **kwargs):
         return RDataset(ds, interp_rho=interp_rho)
 
 
+def open_mfdataset(filename, grid_filename=None, interp_rho=False, **kwargs):
+    """
+    Open a ROMS history/average file, optionally a ROMS grid file, and
+    construct a RDataset.
+
+    ds = open_mfdataset(filename, grid_filename=None, interp_rho=False,
+                        **kwargs)
+    Inputs:
+        filename      - str, ROMS file path
+        grid_filename - str, ROMS grid file path
+        interp_rho    - bool, if to interpolate all dataArray to rho points
+        **kwargs      - other keyword arguments to be passed to RDataset
+    """
+    ds = xr.open_mfdataset(filename, **kwargs)
+    if grid_filename is not None:
+        if isinstance(filename, list):
+            grd = grid.get_ROMS_grid(grid_file=grid_filename,
+                                     hist_file=filename[0])
+        else:
+            grd = grid.get_ROMS_grid(grid_file=grid_filename,
+                                     hist_file=filename)
+        if 'zeta' in ds:
+            grd.vgrid.zeta = ds.zeta
+        return RDataset(ds, grd, interp_rho=interp_rho)
+    else:
+        return RDataset(ds, interp_rho=interp_rho)
+
+
 class RDataset(xr.Dataset):
     """
     ROMS Xarray Dataset object.
@@ -1217,13 +1246,14 @@ class RDataset(xr.Dataset):
         # House cleaning.
         # Pass in projeciton information to Dataset, in order to generate
         # projection function for later use.
-        for var in self.data_vars:
-            proj4_init = self._grid.hgrid.proj.to_proj4()
+        proj4_init = self._grid.hgrid.proj.to_proj4()
         self.attrs['proj4_init'] = proj4_init
+        for var in self:
+            self[var].attrs['proj4_init'] = proj4_init
 
         # When Dataset is loaded with open_mfdataset, clean some variables
         # by averaging over ocean_time.
-        if self.ntimes.dims == ('ocean_time', ):
+        if ('ntimes' in self) and (self.ntimes.dims == ('ocean_time', )):
             for var in self.coords:
                 vdim = self[var].dims
                 if var != 'ocean_time' and 'ocean_time' in vdim:

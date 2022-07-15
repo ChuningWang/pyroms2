@@ -1665,7 +1665,7 @@ class EditMaskIJ:
 
                 # write to output file
                 f = open(self._file_out, 'a')
-                s = r'%d %d %f iceshelf' % (i, j, self.mask[i, j])
+                s = r'%d %d %f' % (i, j, self.mask[i, j])
                 f.write(s + '\n')
                 f.close()
                 s_fmt = r'%4d %4d %6d' % (i, j, int(self.mask[i, j]))
