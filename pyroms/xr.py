@@ -332,6 +332,23 @@ class ROMSDatasetAccessor(ROMSAccessor):
                 drop_coords.append(coord)
         for coord in drop_coords:
             ds.__delitem__(coord)
+
+        # Rotate velocities to allign with along/cross directions
+        npts = len(lon)
+        angle = np.zeros(npts)
+        geod = pyproj.Geod(ellps='WGS84')
+        angle[:-1], _, _ = geod.inv(lon[:-1], lat[:-1], lon[1:], lat[1:])
+        angle = (angle-90.)*np.pi/180.
+        angle[-1] = angle[-2]
+
+        ang = np.cos(self._obj.angle) + np.sin(self._obj.angle)*1j
+        ang = ang.interp(dict(eta_rho=ds_locs.eta, xi_rho=ds_locs.xi))
+        ds.angle.data = np.angle(ang.data)
+        ds['angle_rot'] = ds.angle - angle
+
+        ds['u_rot'] = ds.u*np.cos(ds.angle_rot)-ds.v*np.sin(ds.angle_rot)
+        ds['v_rot'] = ds.u*np.sin(ds.angle_rot)+ds.v*np.cos(ds.angle_rot)
+
         return ds
 
     def transform(self, z):
@@ -747,6 +764,14 @@ class ROMSDataArrayAccessor(ROMSAccessor):
         grd = Grid(ds, coords={'S': {'center': self.s_nam}},
                    periodic=False)
         da = grd.transform(self._obj, 'S', z, target_data=self.z)
+        dims0 = list(da.dims)
+        dims0.remove('Z')
+        if 'ocean_time' in dims0:
+            dims0.remove('ocean_time')
+            dims = ('ocean_time', 'Z', ) + tuple(dims0)
+        else:
+            dims = ('Z', ) + tuple(dims0)
+        da = da.transpose(*dims)
         return da
 
     def loc_selector(self):

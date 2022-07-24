@@ -641,8 +641,8 @@ class CGridGeo(CGrid):
             angle, _, _ = geod.inv(
                 self.lon[:, :-1], self.lat[:, :-1],
                 self.lon[:, 1:], self.lat[:, 1:])
-            angle = angle*np.pi/180.
-            angle = np.sin(angle) + np.cos(angle)*1j
+            angle = (angle-90.)*np.pi/180.
+            angle = np.cos(angle) + np.sin(angle)*1j
             angle = np.angle(0.5*(angle[1:, :] + angle[:-1, :]))
             self.angle_rho = angle
         return
