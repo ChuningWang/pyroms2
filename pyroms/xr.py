@@ -179,17 +179,30 @@ class ROMSAccessor:
             ds_locs - interpolation coordinates.
         """
 
-        lon, lat = np.asarray(lon), np.asarray(lat)
+        lon, lat = np.asarray(lon).squeeze(), np.asarray(lat).squeeze()
         assert len(lon) == len(lat), 'lon/lat must have the same length.'
+        assert lon.ndim == 1, 'lon/lat must be 1-D arrays.'
+        npts = len(lon)
+        proj = pyproj.Proj(self._obj.attrs['proj4_init'])
+        x, y = proj(lon, lat)
+        xv, yv = np.zeros(npts+1), np.zeros(npts+1)
+        xv[1:-1], yv[1:-1] = 0.5*(x[1:] + x[:-1]), 0.5*(y[1:] + y[:-1])
+        xv[0], xv[-1] = xv[1] - (x[1] - x[0]), xv[-2] + (x[-1] - x[-2])
+        yv[0], yv[-1] = yv[1] - (y[1] - y[0]), yv[-2] + (y[-1] - y[-2])
+        lonv, latv = proj(xv, yv, inverse=True)
+        if lon.max() > 180:
+            lonv = lonv % 360
 
         # Pass in geographic information to a DataArray
         ds_locs = xr.Dataset()
         ds_locs['lon'] = DataArray(lon, dims=('track'))
         ds_locs['lat'] = DataArray(lat, dims=('track'))
-        proj = pyproj.Proj(self._obj.attrs['proj4_init'])
-        x, y = proj(ds_locs['lon'], ds_locs['lat'])
         ds_locs['x'] = DataArray(x, dims=('track'))
         ds_locs['y'] = DataArray(y, dims=('track'))
+        ds_locs['lon_vert'] = DataArray(lonv, dims=('track_vert'))
+        ds_locs['lat_vert'] = DataArray(latv, dims=('track_vert'))
+        ds_locs['x_vert'] = DataArray(xv, dims=('track_vert'))
+        ds_locs['y_vert'] = DataArray(yv, dims=('track_vert'))
 
         if time is not None:
             time = np.asarray(time)
@@ -201,7 +214,8 @@ class ROMSAccessor:
         # Assign coordiantes and calculate distance from lon[0]/lat[0]
         dis = np.hypot(x[1:] - x[:-1], y[1:] - y[:-1]).cumsum()
         dis = np.concatenate((np.array([0]), dis))
-        ds_locs = ds_locs.assign_coords(track=np.arange(len(lon)))
+        ds_locs = ds_locs.assign_coords(track=np.arange(len(lon))+0.5)
+        ds_locs = ds_locs.assign_coords(track_vert=np.arange(len(lon)+1))
         ds_locs = ds_locs.assign_coords(distance=('track', dis))
         return ds_locs
 
@@ -323,7 +337,7 @@ class ROMSDatasetAccessor(ROMSAccessor):
             ds.coords[var] = ds[var + '_rho']
         ds.coords['eta'], ds.coords['xi'] = ds_locs.eta, ds_locs.xi
 
-        # Clean up coordiantes with suffix rho/u/v/psi/vert.
+        # Clean up coordiantes with suffix rho/u/v/psi/vert
         drop_coords = []
         for coord in ds.coords:
             if ('_rho' in coord or '_u' in coord or '_v' in coord or
@@ -332,6 +346,12 @@ class ROMSDatasetAccessor(ROMSAccessor):
                 drop_coords.append(coord)
         for coord in drop_coords:
             ds.__delitem__(coord)
+
+        # Reassign _vert coordinates (for easy plotting)
+        ds.coords['lon_vert'] = ds_locs.lon_vert
+        ds.coords['lat_vert'] = ds_locs.lat_vert
+        ds.coords['x_vert'] = ds_locs.x_vert
+        ds.coords['y_vert'] = ds_locs.y_vert
 
         # Rotate velocities to allign with along/cross directions
         npts = len(lon)
@@ -1198,12 +1218,12 @@ class RDataset(xr.Dataset):
 
         # ---------------------------------------------------------------
         # Remake basic coordinates for easy interpolation
-        self.coords['eta_rho'] = np.arange(self.dims['eta_rho'])+0.5
-        self.coords['xi_rho'] = np.arange(self.dims['xi_rho'])+0.5
-        self.coords['eta_vert'] = range(self.dims['eta_rho']+1)
-        self.coords['xi_vert'] = range(self.dims['xi_rho']+1)
-        self.coords['eta_psi'] = range(self.dims['eta_psi'])
-        self.coords['xi_psi'] = range(self.dims['xi_psi'])
+        self.coords['eta_rho'] = np.arange(self.dims['eta_rho']) + 0.5
+        self.coords['xi_rho'] = np.arange(self.dims['xi_rho']) + 0.5
+        self.coords['eta_vert'] = np.arange(self.dims['eta_rho']+1)
+        self.coords['xi_vert'] = np.arange(self.dims['xi_rho']+1)
+        self.coords['eta_psi'] = np.arange(self.dims['eta_psi']) + 1.0
+        self.coords['xi_psi'] = np.arange(self.dims['xi_psi']) + 1.0
         self.coords['eta_u'] = self.eta_rho.data.copy()
         self.coords['xi_u'] = self.xi_psi.data.copy()
         self.coords['eta_v'] = self.eta_psi.data.copy()

@@ -592,6 +592,7 @@ class CGridGeo(CGrid):
             self._calculate_angle_rho()
         else:
             self.angle_rho = angle_rho
+        self._calculate_angle_xy()
 
         self.f = 2.0 * 7.29e-5 * np.sin(self.lat_rho * np.pi / 180.0)
         self.spherical = True
@@ -641,10 +642,16 @@ class CGridGeo(CGrid):
             angle, _, _ = geod.inv(
                 self.lon[:, :-1], self.lat[:, :-1],
                 self.lon[:, 1:], self.lat[:, 1:])
-            angle = (angle-90.)*np.pi/180.
+            angle = (90.-angle)*np.pi/180.
             angle = np.cos(angle) + np.sin(angle)*1j
             angle = np.angle(0.5*(angle[1:, :] + angle[:-1, :]))
             self.angle_rho = angle
+        return
+
+    def _calculate_angle_xy(self):
+        self.angle_xy = np.arctan2(
+            np.diff(0.5*(self.y_vert[1:, :]+self.y_vert[:-1, :])),
+            np.diff(0.5*(self.x_vert[1:, :]+self.x_vert[:-1, :])))
         return
 
     def add_focus(self, x0: float, y0: float,

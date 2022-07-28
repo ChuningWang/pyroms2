@@ -61,6 +61,10 @@ class ROMSGrid(object):
                     ['eta_rho', 'xi_rho'], self.hgrid.angle_rho,
                     dict(long_name='angle between XI-axis and EAST',
                          units='radians')),
+                angle_xy=(
+                    ['eta_rho', 'xi_rho'], self.hgrid.angle_xy,
+                    dict(long_name='angle between XI-axis and X',
+                         units='radians')),
                 mask_rho=(
                     ['eta_rho', 'xi_rho'], self.hgrid.mask_rho,
                     dict(long_name='mask on RHO-points')),
