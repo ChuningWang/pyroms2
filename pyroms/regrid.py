@@ -112,44 +112,66 @@ def make_ini(dsi: xr.DataArray,
                 ('ocean_time', 'eta_rho', 'xi_rho'),
                 long_name='free-surface', units='meter',
                 fill_value=_fill_value)
+        if 'ubar' in vars_out:
+            urho = dsr.ubar
+            u = urho.interp(xi_rho=urho.xi_rho[:-1]+0.5)
+            u = u.where(mask_u == 1, other=_fill_value)
+            pyroms.io.nc_write_var(
+                fh, u, 'ubar',
+                ('ocean_time', 'eta_u', 'xi_u'),
+                long_name='vertically integrated u-momentum component',
+                units='meter second-1',
+                fill_value=_fill_value)
         if 'u' in vars_out:
             urho = dsr.u
-            u2rho = (urho*dso.dz).sum(dim='s_rho')/dso.h
             u = urho.interp(xi_rho=urho.xi_rho[:-1]+0.5)
-            u2 = u2rho.interp(xi_rho=u2rho.xi_rho[:-1]+0.5)
             u = u.where(mask_u == 1, other=_fill_value)
-            u2 = u2.where(mask_u == 1, other=_fill_value)
             pyroms.io.nc_write_var(
                 fh, u, 'u',
                 ('ocean_time', 's_rho', 'eta_u', 'xi_u'),
                 long_name='u-momentum component',
                 units='meter second-1',
                 fill_value=_fill_value)
+            if 'ubar' not in vars_out:
+                u2rho = (urho*dso.dz).sum(dim='s_rho')/dso.h
+                u2 = u2rho.interp(xi_rho=u2rho.xi_rho[:-1]+0.5)
+                u2 = u2.where(mask_u == 1, other=_fill_value)
+                pyroms.io.nc_write_var(
+                    fh, u2, 'ubar',
+                    ('ocean_time', 'eta_u', 'xi_u'),
+                    long_name='vertically integrated u-momentum component',
+                    units='meter second-1',
+                    fill_value=_fill_value)
+        if 'vbar' in vars_out:
+            vrho = dsr.vbar
+            v = vrho.interp(eta_rho=vrho.eta_rho[:-1]+0.5)
+            v = v.where(mask_v == 1, other=_fill_value)
             pyroms.io.nc_write_var(
-                fh, u2, 'ubar',
-                ('ocean_time', 'eta_u', 'xi_u'),
-                long_name='vertically integrated u-momentum component',
+                fh, v, 'vbar',
+                ('ocean_time', 'eta_v', 'xi_v'),
+                long_name='vertically integrated v-momentum component',
                 units='meter second-1',
                 fill_value=_fill_value)
         if 'v' in vars_out:
             vrho = dsr.v
-            v2rho = (vrho*dso.dz).sum(dim='s_rho')/dso.h
             v = vrho.interp(eta_rho=vrho.eta_rho[:-1]+0.5)
-            v2 = v2rho.interp(eta_rho=v2rho.eta_rho[:-1]+0.5)
             v = v.where(mask_v == 1, other=_fill_value)
-            v2 = v2.where(mask_v == 1, other=_fill_value)
             pyroms.io.nc_write_var(
                 fh, v, 'v',
                 ('ocean_time', 's_rho', 'eta_v', 'xi_v'),
                 long_name='v-momentum component',
                 units='meter second-1',
                 fill_value=_fill_value)
-            pyroms.io.nc_write_var(
-                fh, v2, 'vbar',
-                ('ocean_time', 'eta_v', 'xi_v'),
-                long_name='vertically integrated v-momentum component',
-                units='meter second-1',
-                fill_value=_fill_value)
+            if 'vbar' not in vars_out:
+                v2rho = (vrho*dso.dz).sum(dim='s_rho')/dso.h
+                v2 = v2rho.interp(eta_rho=v2rho.eta_rho[:-1]+0.5)
+                v2 = v2.where(mask_v == 1, other=_fill_value)
+                pyroms.io.nc_write_var(
+                    fh, v2, 'vbar',
+                    ('ocean_time', 'eta_v', 'xi_v'),
+                    long_name='vertically integrated v-momentum component',
+                    units='meter second-1',
+                    fill_value=_fill_value)
         if 'aice' in vars_out:
             pyroms.io.nc_write_var(
                 fh, dsr.aice, 'aice',
@@ -430,24 +452,36 @@ def make_bry(dsi: xr.DataArray,
                         long_name='free-surface at ' + var_dir + ' boundary',
                         units='meter',
                         fill_value=_fill_value)
-                if 'u' in vars_out:
-                    urho = dsr.u
-                    u2rho = (urho*dso_b.dz).sum(dim='s_rho')/dso_b.h
+                if 'ubar' in vars_out:
+                    urho = dsr.ubar
                     if var_dir in ['west', 'east']:
                         u = urho.mean(dim='xi_rho')
-                        u2 = u2rho.mean(dim='xi_rho')
                     if var_dir == 'south':
                         u = urho.interp(eta_rho=urho.eta_rho[0],
                                         xi_rho=urho.xi_rho[:-1]+0.5)
-                        u2 = u2rho.interp(eta_rho=u2rho.eta_rho[0],
-                                          xi_rho=u2rho.xi_rho[:-1]+0.5)
                     if var_dir == 'north':
                         u = urho.interp(eta_rho=urho.eta_rho[1],
                                         xi_rho=urho.xi_rho[:-1]+0.5)
-                        u2 = u2rho.interp(eta_rho=u2rho.eta_rho[1],
-                                          xi_rho=u2rho.xi_rho[:-1]+0.5)
                     u = u.where(mask_u == 1, 0)
-                    u2 = u2.where(mask_u == 1, 0)
+                    pyroms.io.nc_write_var(
+                        fh, u, 'ubar_' + var_dir,
+                        ('ocean_time',) + dimu,
+                        long_name='vertically integrated ' +
+                                  'u-momentum component at ' + var_dir +
+                                  ' boundary',
+                        units='meter second-1',
+                        fill_value=_fill_value)
+                if 'u' in vars_out:
+                    urho = dsr.u
+                    if var_dir in ['west', 'east']:
+                        u = urho.mean(dim='xi_rho')
+                    if var_dir == 'south':
+                        u = urho.interp(eta_rho=urho.eta_rho[0],
+                                        xi_rho=urho.xi_rho[:-1]+0.5)
+                    if var_dir == 'north':
+                        u = urho.interp(eta_rho=urho.eta_rho[1],
+                                        xi_rho=urho.xi_rho[:-1]+0.5)
+                    u = u.where(mask_u == 1, 0)
                     pyroms.io.nc_write_var(
                         fh, u, 'u_' + var_dir,
                         ('ocean_time', 's_rho') + dimu,
@@ -455,32 +489,55 @@ def make_bry(dsi: xr.DataArray,
                                   ' boundary',
                         units='meter second-1',
                         fill_value=_fill_value)
+                    if 'ubar' not in vars_out:
+                        u2rho = (urho*dso_b.dz).sum(dim='s_rho')/dso_b.h
+                        if var_dir in ['west', 'east']:
+                            u2 = u2rho.mean(dim='xi_rho')
+                        if var_dir == 'south':
+                            u2 = u2rho.interp(eta_rho=u2rho.eta_rho[0],
+                                              xi_rho=u2rho.xi_rho[:-1]+0.5)
+                        if var_dir == 'north':
+                            u2 = u2rho.interp(eta_rho=u2rho.eta_rho[1],
+                                              xi_rho=u2rho.xi_rho[:-1]+0.5)
+                        u2 = u2.where(mask_u == 1, 0)
+                        pyroms.io.nc_write_var(
+                            fh, u2, 'ubar_' + var_dir,
+                            ('ocean_time',) + dimu,
+                            long_name='vertically integrated ' +
+                                      'u-momentum component at ' + var_dir +
+                                      ' boundary',
+                            units='meter second-1',
+                            fill_value=_fill_value)
+                if 'vbar' in vars_out:
+                    vrho = dsr.vbar
+                    if var_dir == 'west':
+                        v = vrho.interp(eta_rho=vrho.eta_rho[:-1]+0.5,
+                                        xi_rho=vrho.xi_rho[0])
+                    if var_dir == 'east':
+                        v = vrho.interp(eta_rho=vrho.eta_rho[:-1]+0.5,
+                                        xi_rho=vrho.xi_rho[1])
+                    if var_dir in ['south', 'north']:
+                        v = vrho.mean(dim='eta_rho')
+                    v = v.where(mask_v == 1, 0)
                     pyroms.io.nc_write_var(
-                        fh, u2, 'ubar_' + var_dir,
-                        ('ocean_time',) + dimu,
+                        fh, v, 'vbar_' + var_dir,
+                        ('ocean_time',) + dimv,
                         long_name='vertically integrated ' +
-                                  'u-momentum component at ' + var_dir +
+                                  'v-momentum component at ' + var_dir +
                                   ' boundary',
                         units='meter second-1',
                         fill_value=_fill_value)
                 if 'v' in vars_out:
                     vrho = dsr.v
-                    v2rho = (vrho*dso_b.dz).sum(dim='s_rho')/dso_b.h
                     if var_dir == 'west':
                         v = vrho.interp(eta_rho=vrho.eta_rho[:-1]+0.5,
                                         xi_rho=vrho.xi_rho[0])
-                        v2 = v2rho.interp(eta_rho=v2rho.eta_rho[:-1]+0.5,
-                                          xi_rho=v2rho.xi_rho[0])
                     if var_dir == 'east':
                         v = vrho.interp(eta_rho=vrho.eta_rho[:-1]+0.5,
                                         xi_rho=vrho.xi_rho[1])
-                        v2 = v2rho.interp(eta_rho=v2rho.eta_rho[:-1]+0.5,
-                                          xi_rho=v2rho.xi_rho[1])
                     if var_dir in ['south', 'north']:
                         v = vrho.mean(dim='eta_rho')
-                        v2 = v2rho.mean(dim='eta_rho')
                     v = v.where(mask_v == 1, 0)
-                    v2 = v2.where(mask_v == 1, 0)
                     pyroms.io.nc_write_var(
                         fh, v, 'v_' + var_dir,
                         ('ocean_time', 's_rho') + dimv,
@@ -488,14 +545,25 @@ def make_bry(dsi: xr.DataArray,
                                   ' boundary',
                         units='meter second-1',
                         fill_value=_fill_value)
-                    pyroms.io.nc_write_var(
-                        fh, v2, 'vbar_' + var_dir,
-                        ('ocean_time',) + dimv,
-                        long_name='vertically integrated ' +
-                                  'v-momentum component at ' + var_dir +
-                                  ' boundary',
-                        units='meter second-1',
-                        fill_value=_fill_value)
+                    if 'vbar' not in vars_out:
+                        v2rho = (vrho*dso_b.dz).sum(dim='s_rho')/dso_b.h
+                        if var_dir == 'west':
+                            v2 = v2rho.interp(eta_rho=v2rho.eta_rho[:-1]+0.5,
+                                              xi_rho=v2rho.xi_rho[0])
+                        if var_dir == 'east':
+                            v2 = v2rho.interp(eta_rho=v2rho.eta_rho[:-1]+0.5,
+                                              xi_rho=v2rho.xi_rho[1])
+                        if var_dir in ['south', 'north']:
+                            v2 = v2rho.mean(dim='eta_rho')
+                        v2 = v2.where(mask_v == 1, 0)
+                        pyroms.io.nc_write_var(
+                            fh, v2, 'vbar_' + var_dir,
+                            ('ocean_time',) + dimv,
+                            long_name='vertically integrated ' +
+                                      'v-momentum component at ' + var_dir +
+                                      ' boundary',
+                            units='meter second-1',
+                            fill_value=_fill_value)
                 if 'aice' in vars_out:
                     pyroms.io.nc_write_var(
                         fh, dsr.aice.isel(slc), 'aice_' + var_dir,

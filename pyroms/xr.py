@@ -285,6 +285,66 @@ class ROMSDatasetAccessor(ROMSAccessor):
         if len(self._vpos) == 0:
             self._vpos = ['']
 
+    def station(self, lon, lat):
+        """
+        Extract station profiles from ROMS Dataset.
+
+        ds = roms.station(lon, lat)
+        Inputs:
+            lon, lat - float points of longitude/latitude
+        Output:
+            ds - station Dataset.
+        """
+        proj = pyproj.Proj(self._obj.attrs['proj4_init'])
+        x, y = proj(lon, lat)
+
+        # Calculate disctance array and find the integer part of coordiantes.
+        xdis, ydis = self.x - x, self.y - y
+        dis_min = np.hypot(xdis, ydis).argmin(dim=('eta_rho', 'xi_rho'))
+
+        # eta0, xi0 are the coords of left bottom corner.
+        etav, xiv = dis_min['eta_rho'].item(), dis_min['xi_rho'].item()
+        eta0, xi0 = self._obj.eta_vert.data[0], self._obj.xi_vert.data[0]
+
+        # Calculate the fractional part of coordinates and add to integer part.
+        xv, yv = self._obj.x_vert.data, self._obj.y_vert.data
+        ivec = np.array([xv[etav+1, xiv]-xv[etav, xiv],
+                         yv[etav+1, xiv]-yv[etav, xiv]])
+        jvec = np.array([xv[etav, xiv+1]-xv[etav, xiv],
+                         yv[etav, xiv+1]-yv[etav, xiv]])
+        c = np.array([x-xv[etav, xiv], y-yv[etav, xiv]])
+        efrac = np.dot(ivec, c)/(np.dot(ivec, ivec))
+        xfrac = np.dot(jvec, c)/(np.dot(jvec, jvec))
+        eta = eta0 + etav + efrac
+        xi = xi0 + xiv + xfrac
+
+        # Perform interpolation using Xarray's interp method
+        interp_coords = {}
+        for pos in self._hpos:
+            interp_coords['eta' + pos] = eta
+            interp_coords['xi' + pos] = xi
+        ds = self._obj.interp(interp_coords)
+
+        # Clean up coordiantes with suffix rho/u/v/psi/vert
+        drop_coords = []
+        for coord in ds.coords:
+            if ('_rho' in coord or '_u' in coord or '_v' in coord or
+                '_psi' in coord or '_vert' in coord) and \
+               coord != 's_rho':
+                drop_coords.append(coord)
+        for coord in drop_coords:
+            ds.__delitem__(coord)
+
+        # Process angles to avoid wrap-around issue.
+        angle_rho = np.cos(self._obj.angle) + np.sin(self._obj.angle)*1j
+        angle_rho = angle_rho.interp(dict(eta_rho=eta, xi_rho=xi))
+        ds.angle.data = np.angle(angle_rho)
+
+        ds['eta'], ds['xi'], ds['lon'], ds['lat'], ds['x'], ds['y'] = \
+            eta, xi, lon, lat, x, y
+
+        return ds
+
     def interp(self, lon, lat, time=None):
         """
         Horizontal interpolation method for ROMS Dataset.
@@ -317,8 +377,8 @@ class ROMSDatasetAccessor(ROMSAccessor):
             efrac = np.dot(ivec, c)/(np.dot(ivec, ivec))
             xfrac = np.dot(jvec, c)/(np.dot(jvec, jvec))
 
-            eta_loc.append(ei + eta0 + efrac)
-            xi_loc.append(xi + xi0 + xfrac)
+            eta_loc.append(eta0 + ei + efrac)
+            xi_loc.append(xi0 + xi + xfrac)
 
         ds_locs['eta'] = DataArray(eta_loc, dims=('track'))
         ds_locs['xi'] = DataArray(xi_loc, dims=('track'))
@@ -353,18 +413,19 @@ class ROMSDatasetAccessor(ROMSAccessor):
         ds.coords['x_vert'] = ds_locs.x_vert
         ds.coords['y_vert'] = ds_locs.y_vert
 
+        # Process angles to avoid wrap-around issue.
+        angle_rho = np.cos(self._obj.angle) + np.sin(self._obj.angle)*1j
+        angle_rho = angle_rho.interp(dict(eta_rho=ds_locs.eta,
+                                          xi_rho=ds_locs.xi))
+        ds.angle.data = np.angle(angle_rho.data)
+
         # Rotate velocities to allign with along/cross directions
-        npts = len(lon)
-        angle = np.zeros(npts)
+        angle = np.zeros(len(lon))
         geod = pyproj.Geod(ellps='WGS84')
         angle[:-1], _, _ = geod.inv(lon[:-1], lat[:-1], lon[1:], lat[1:])
         angle = (angle-90.)*np.pi/180.
         angle[-1] = angle[-2]
-
-        ang = np.cos(self._obj.angle) + np.sin(self._obj.angle)*1j
-        ang = ang.interp(dict(eta_rho=ds_locs.eta, xi_rho=ds_locs.xi))
-        ds.angle.data = np.angle(ang.data)
-        ds['angle_rot'] = ds.angle - angle
+        ds['angle_rot'] = angle - ds.angle
 
         ds['u_rot'] = ds.u*np.cos(ds.angle_rot)-ds.v*np.sin(ds.angle_rot)
         ds['v_rot'] = ds.u*np.sin(ds.angle_rot)+ds.v*np.cos(ds.angle_rot)
@@ -378,6 +439,32 @@ class ROMSDatasetAccessor(ROMSAccessor):
         """
         # TODO
         return
+
+    def uv_rotate(self):
+        """
+        Rotate U/V velocity from XI/ETA coordinates to X/Y coordinates
+        """
+        angle = self._obj.angle_xy
+        udims, vdims = self._obj.u.dims, self._obj.v.dims
+        if 'xi_rho' in udims and 'eta_rho' in udims and \
+           'xi_rho' in vdims and 'eta_rho' in vdims:
+            u, v = self._obj.u, self._obj.v
+            ubar, vbar = self._obj.ubar, self._obj.vbar
+        else:
+            u = self._obj.u.interp(dict(xi_u=self._obj.xi_rho,
+                                        eta_u=self._obj.eta_rho))
+            v = self._obj.v.interp(dict(xi_v=self._obj.xi_rho,
+                                        eta_v=self._obj.eta_rho))
+            ubar = self._obj.ubar.interp(dict(xi_u=self._obj.xi_rho,
+                                              eta_u=self._obj.eta_rho))
+            vbar = self._obj.vbar.interp(dict(xi_v=self._obj.xi_rho,
+                                              eta_v=self._obj.eta_rho))
+
+        self._obj['u_x'] = u*np.cos(angle) - v*np.sin(angle)
+        self._obj['v_y'] = v*np.cos(angle) + u*np.sin(angle)
+        self._obj['ubar_x'] = ubar*np.cos(angle) - vbar*np.sin(angle)
+        self._obj['vbar_y'] = vbar*np.cos(angle) + ubar*np.sin(angle)
+        return self._obj
 
     # Depth related property decorators
     @property
@@ -1234,11 +1321,21 @@ class RDataset(xr.Dataset):
         # points
         if self._interp_rho:
             # Interpolate and remove u/v related coords
+            uv_vars = []
+            for var in self.data_vars:
+                vdims = self[var].dims
+                if ('xi_u' in vdims or 'eta_u' in vdims or
+                    'xi_v' in vdims or 'eta_v' in vdims) and \
+                   'ocean_time' in vdims:
+                    uv_vars.append(var)
+                    self[var] = self[var].where(~self[var].isnull(), other=0)
             itp = self.interp(eta_u=self.eta_rho, eta_v=self.eta_rho,
                               xi_u=self.xi_rho, xi_v=self.xi_rho,
                               s_w=self.s_rho)
             for var in self.data_vars:
                 self[var] = itp[var]
+            for var in uv_vars:
+                self[var] = self[var].where(self.mask_rho == 1)
             drop_vars = []
             for var in self:
                 if 'ocean_time' not in self[var].dims and \
