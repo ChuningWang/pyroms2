@@ -745,12 +745,12 @@ def data_prep(dsi: xr.DataArray,
     # Rename and transpose dataset
     if z in dsi.dims:
         dsi = dsi.rename({t: 'ocean_time', z: 'z', x: 'lon', y: 'lat'})
-        dsi = dsi.transpose('ocean_time', 'z', 'lat', 'lon')
+        dsi = dsi.transpose('ocean_time', 'z', ...)
         # Drop depth slices without valid data.
         dsi = dsi.dropna(dim='z', how='all')
     else:
         dsi = dsi.rename({t: 'ocean_time', x: 'lon', y: 'lat'})
-        dsi = dsi.transpose('ocean_time', 'lat', 'lon')
+        dsi = dsi.transpose('ocean_time', ...)
 
     # Rename variables.
     if vars_in is not None:

@@ -55,7 +55,7 @@ class ROMSGrid(object):
                          units='meter')),
                 f=(
                     ['eta_rho', 'xi_rho'], self.hgrid.f,
-                    dict(long_name='iceshelf depth at RHO-points',
+                    dict(long_name='Coriolis parameter at RHO-points',
                          units='meter')),
                 angle=(
                     ['eta_rho', 'xi_rho'], self.hgrid.angle_rho,
@@ -646,7 +646,7 @@ def get_ROMS_vgrid(gridid, zeta=None):
     try:
         h = fh.variables['h'][:]
     except Exception:
-        raise ValueError('NetCDF file must contain the bathymetry h')
+        raise ValueError('NetCDF file must contain the bathymetry h.')
 
     if 'hraw' in fh.variables.keys():
         hraw = fh.variables['hraw'][:]

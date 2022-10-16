@@ -145,6 +145,9 @@ class CGrid:
             self._calculate_metrics()
         else:
             self.dx, self.dy = dx, dy
+        self.pm, self.pn = 1./self.dx, 1./self.dy
+        self.xl = np.maximum(self.dx[0, :].sum(), self.dx[-1, :].sum())
+        self.el = np.maximum(self.dy[:, 0].sum(), self.dy[:, -1].sum())
 
         if dndx is None or dmde is None:
             self._calculate_derivative_metrics()
@@ -187,9 +190,6 @@ class CGrid:
         y_temp = 0.5*(self.y_vert[:, 1:]+self.y_vert[:, :-1])
         self.dy = np.sqrt(np.diff(x_temp, axis=0)**2 +
                           np.diff(y_temp, axis=0)**2)
-
-        self.xl = np.maximum(self.dx[0, :].sum(), self.dx[-1, :].sum())
-        self.el = np.maximum(self.dy[:, 0].sum(), self.dy[:, -1].sum())
         return
 
     def _calculate_derivative_metrics(self):
@@ -579,9 +579,9 @@ class CGridGeo(CGrid):
             self._calculate_metrics()
         else:
             self.dx, self.dy = dx, dy
-            self.pm, self.pn = 1./dx, 1./dy
-            self.xl = np.maximum(self.dx[0, :].sum(), self.dx[-1, :].sum())
-            self.el = np.maximum(self.dy[:, 0].sum(), self.dy[:, -1].sum())
+        self.pm, self.pn = 1./self.dx, 1./self.dy
+        self.xl = np.maximum(self.dx[0, :].sum(), self.dx[-1, :].sum())
+        self.el = np.maximum(self.dy[:, 0].sum(), self.dy[:, -1].sum())
 
         if dndx is None or dmde is None:
             self._calculate_derivative_metrics()
@@ -612,14 +612,9 @@ class CGridGeo(CGrid):
             _, _, dx = geod.inv(self.lon[:, 1:],  self.lat[:, 1:],
                                 self.lon[:, :-1], self.lat[:, :-1])
             self.dx = 0.5*(dx[1:, :]+dx[:-1, :])
-            self.pm = 1.0/self.dx
             _, _, dy = geod.inv(self.lon[1:, :],  self.lat[1:, :],
                                 self.lon[:-1, :], self.lat[:-1, :])
             self.dy = 0.5*(dy[:, 1:]+dy[:, :-1])
-            self.pn = 1.0/self.dy
-
-            self.xl = np.maximum(self.dx[0, :].sum(), self.dx[-1, :].sum())
-            self.el = np.maximum(self.dy[:, 0].sum(), self.dy[:, -1].sum())
         return
 
     def _calculate_angle_rho(self):
