@@ -1,15 +1,32 @@
-import functools
-import numpy as np
-import pyproj
-import xarray as xr
+"""
+Tools to integrate pyROMS with Xarray.
+"""
+
+# python Typing functionalities
+from typing import Union
 from xarray import DataArray, Dataset
-from numba import guvectorize
+
+# Xarray tools
+import functools
+import xarray as xr
 from xgcm import Grid
+
+# computation kernels
+import numpy as np
+from numba import guvectorize
+import pyproj
+
+# plotting tools (for getting isobaths)
 import matplotlib.pyplot as plt
+
+# pyROMS grid tools
 from . import grid, hgrid, vgrid
 
+# other Python utilities
+from glob import glob
 
-def _find_hpos(obj) -> str:
+
+def _find_hpos(obj: Union[DataArray, Dataset]) -> str:
     """
     Pass in a Dataset/DataArray to find the vertex horizontal coordinate
     position (rho/u/v) of the data to be worked with. Searth order is
@@ -33,7 +50,7 @@ def _find_hpos(obj) -> str:
     return pos
 
 
-def _find_vpos(obj) -> str:
+def _find_vpos(obj: Union[DataArray, Dataset]) -> str:
     """
     Pass in a Dataset/DataArray to find the vertex vertical coordinate
     position (r/w) of the data to be worked with.
@@ -51,23 +68,24 @@ def _find_vpos(obj) -> str:
     return pos
 
 
-def _set_hzz(obj, pos, clip_z=True) -> (DataArray, DataArray, DataArray):
+def _set_hzz(obj: Union[DataArray, Dataset], pos: str,
+             clip_z: bool = False) -> (DataArray, DataArray, DataArray):
     """
     Find the coordinate (rho/u/v) associated with the DataArray to
     calculate depth, and prepare data for the calculation.
 
-    h, zice, zeta = _set_hzz(obj, pos, clip_z=True)
+    h, zice, zeta = _set_hzz(obj, pos, clip_z=False)
 
-    Input:
-        obj  - Xarray Dataset or DataArray
-        pos  - name or the coordinate (rho/u/v)
+    Inputs:
+        obj    - Xarray Dataset or DataArray
+        pos    - name or the coordinate (rho/u/v)
+        clip_z - boolean, if average zeta over time slices
     Outputs:
-        h    - bottom bathymetry
-        zice - ice shelf draft depth
-        zeta - sea surface
+        h      - bottom bathymetry
+        zice   - ice shelf draft depth
+        zeta   - sea surface
     """
 
-    # Fetch h/zice/zeta.
     h = obj['h' + pos]
     h = h.where(~h.isnull(), 0)
     if 'zice' + pos in obj.coords:
@@ -78,7 +96,7 @@ def _set_hzz(obj, pos, clip_z=True) -> (DataArray, DataArray, DataArray):
     if 'zeta' in obj.coords:
         zeta = obj['zeta' + pos]
         zeta = zeta.where(~zeta.isnull(), 0)
-        if 'ocean_time' in zeta.dims and not clip_z:
+        if 'ocean_time' in zeta.dims and clip_z:
             zeta = zeta.mean(dim='ocean_time')
     else:
         zeta = xr.zeros_like(h)
@@ -116,7 +134,7 @@ def _set_z(h: DataArray, zice: DataArray, zeta: DataArray,
     return z
 
 
-def _calc_z(obj, vpos: str, hpos: str) -> DataArray:
+def _calc_z(obj: Union[DataArray, Dataset], vpos: str, hpos: str) -> DataArray:
     """
     Wrapper function for _set_z.
 
@@ -167,17 +185,23 @@ class ROMSAccessor:
             self._is_dataset = False
             self._is_dataarray = False
 
-    def set_locs(self, lon, lat, time=None, get_vert=True, geo=True):
+    def set_locs(self, lon, lat, time=None,
+                 get_vert: bool = True, geo: bool = True):
         """
         Put lon/lat and x/y coords in a DataArray given lon, lat as
         tuple/list/ndarray.
 
-        ds_locs = roms.set_locs(lon, lat, time=None)
+        ds_locs = roms.set_locs(lon, lat, time=None,
+                                get_vert=True, geo=True)
+
         Inputs:
-            lon, lat - 1-D list of longitude/latitude
+            lon, lat        - 1-D list of longitude/latitude
             time (optional) - 1-D list of time
+            get_vert        - if calculate vert points
+            geo             - if the input arguments lon/lat are
+                              geographical or cartisian
         Output:
-            ds_locs - interpolation coordinates.
+            ds_locs         - interpolation coordinates
         """
 
         lon, lat = np.asarray(lon).squeeze(), np.asarray(lat).squeeze()
@@ -191,13 +215,18 @@ class ROMSAccessor:
             x, y = lon, lat
             lon, lat = proj(x, y, inverse=True)
 
-        # Pass in geographic information to a DataArray
+        # Pass in geographic information to a Dataset
         ds_locs = Dataset()
         ds_locs['lon'] = DataArray(lon, dims=('track'))
         ds_locs['lat'] = DataArray(lat, dims=('track'))
         ds_locs['x'] = DataArray(x, dims=('track'))
         ds_locs['y'] = DataArray(y, dims=('track'))
 
+        # Make these alias for ROMS convention
+        ds_locs['lon_rho'], ds_locs['lat_rho'] = ds_locs.lon, ds_locs.lat
+        ds_locs['x_rho'], ds_locs['y_rho'] = ds_locs.x, ds_locs.y
+
+        # If time is provided, also set -ocean_time- in the locs
         if time is not None:
             time = np.asarray(time)
             if len(time) == npts:
@@ -205,50 +234,73 @@ class ROMSAccessor:
             else:
                 ds_locs['ocean_time'] = DataArray(time, dims=('ocean_time'))
 
-        # Assign coordiantes and calculate distance from lon[0]/lat[0]
+        # Assign coordiantes
+        ds_locs = ds_locs.assign_coords(track=np.arange(npts)+0.5)
+
+        # Calculate distance from lon[0]/lat[0]
         dis = np.hypot(x[1:] - x[:-1], y[1:] - y[:-1]).cumsum()
         dis = np.concatenate((np.array([0]), dis))
-        ds_locs = ds_locs.assign_coords(track=np.arange(npts)+0.5)
         ds_locs = ds_locs.assign_coords(distance=('track', dis))
 
         if get_vert:
+            # Get vert points from rho points
             xv, yv = np.zeros(npts+1), np.zeros(npts+1)
             xv[1:-1], yv[1:-1] = 0.5*(x[1:] + x[:-1]), 0.5*(y[1:] + y[:-1])
             xv[0], xv[-1] = xv[1] - (x[1] - x[0]), xv[-2] + (x[-1] - x[-2])
             yv[0], yv[-1] = yv[1] - (y[1] - y[0]), yv[-2] + (y[-1] - y[-2])
             lonv, latv = proj(xv, yv, inverse=True)
-            disv = np.hypot(xv[1:] - xv[:-1], yv[1:] - yv[:-1]).cumsum()
-            disv = np.concatenate((np.array([0]), disv))
-            if lon.max() > 180:
-                lonv = lonv % 360
             ds_locs['lon_vert'] = DataArray(lonv, dims=('track_vert'))
             ds_locs['lat_vert'] = DataArray(latv, dims=('track_vert'))
             ds_locs['x_vert'] = DataArray(xv, dims=('track_vert'))
             ds_locs['y_vert'] = DataArray(yv, dims=('track_vert'))
+
+            # Also calculate distance from the first point
+            disv = np.hypot(xv[1:] - xv[:-1], yv[1:] - yv[:-1]).cumsum()
+            disv = np.concatenate((np.array([0]), disv))
             ds_locs = ds_locs.assign_coords(track_vert=np.arange(npts+1))
             ds_locs = ds_locs.assign_coords(distance_vert=('track_vert', disv))
 
+            # Calculate angles if vert points provided
+            angle_xy = np.arctan2(
+                np.diff(0.5*(yv[1:, :]+yv[:-1, :])),
+                np.diff(0.5*(xv[1:, :]+xv[:-1, :])))
+            geod = pyproj.Geod(ellps=proj.crs.ellipsoid.name.replace(' ', ''))
+            angle, _, _ = geod.inv(
+                ds_locs.lonv[:-1], ds_locs.latv[:-1],
+                ds_locs.lonv[1:], ds_locs.latv[1:])
+            angle = (90.-angle)*np.pi/180.
+            ds_locs['angle_xyr'] = DataArray(angle_xy, dims=('track'))
+            ds_locs['angler'] = DataArray(angle, dims=('track'))
+
         return ds_locs
 
-    def set_locs2d(self, lon, lat, time=None, get_vert=True, geo=True):
+    def set_locs2d(self, lon, lat, time=None,
+                   is_vert: bool = False, get_vert: bool = True,
+                   geo: bool = True):
         """
         Put lon/lat and x/y coords in a DataArray given lon, lat as
         tuple/list/ndarray.
 
-        ds_locs = roms.set_locs(lon, lat, time=None)
+        ds_locs = roms.set_locs2d(lon, lat, time=None, is_vert=False,
+                                  get_vert=True, geo=True)
+
         Inputs:
-            lon, lat - 2-D array of longitude/latitude
+            lon, lat        - 1-D list of longitude/latitude
             time (optional) - 1-D list of time
+            is_vert         - if the input coordinates are at vert points
+            get_vert        - if calculate vert points
+            geo             - if the input arguments lon/lat are
+                              geographical or cartisian
         Output:
-            ds_locs - interpolation coordinates.
+            ds_locs         - interpolation coordinates
         """
 
+        # Prepare lon/lat coords
         lon, lat = np.asarray(lon).squeeze(), np.asarray(lat).squeeze()
         if (lon.ndim == 1) & (lat.ndim == 1):
             lon, lat = np.meshgrid(lon, lat)
         assert lon.shape == lat.shape, 'lon/lat must have the same length.'
         assert lon.ndim == 2, 'lon/lat must be 2-D arrays.'
-        nypts, nxpts = lon.shape
         proj = pyproj.Proj(self._obj.attrs['proj4_init'])
         if geo:
             x, y = proj(lon, lat)
@@ -256,56 +308,156 @@ class ROMSAccessor:
             x, y = lon, lat
             lon, lat = proj(x, y, inverse=True)
 
+        nypts, nxpts = lon.shape
+        if is_vert:
+            nypts, nxpts = nypts - 1, nxpts - 1
+            # Input values are at vert points
+            x_vert, y_vert, lon_vert, lat_vert = x, y, lon, lat
+            x = 0.25*(x_vert[1:, 1:] + x_vert[1:, :-1] +
+                      x_vert[:-1, 1:] + x_vert[:-1, :-1])
+            y = 0.25*(y_vert[1:, 1:] + y_vert[1:, :-1] +
+                      y_vert[:-1, 1:] + y_vert[:-1, :-1])
+            x_u = 0.5*(x_vert[1:, 1:-1] + x_vert[:-1, 1:-1])
+            y_u = 0.5*(y_vert[1:, 1:-1] + y_vert[:-1, 1:-1])
+            x_v = 0.5*(x_vert[1:-1, 1:] + x_vert[1:-1, :-1])
+            y_v = 0.5*(y_vert[1:-1, 1:] + y_vert[1:-1, :-1])
+            x_psi, y_psi = x_vert[1:-1, 1:-1], y_vert[1:-1, 1:-1]
+
+            # Projection transform
+            lon, lat = proj(x, y, inverse=True)
+            lon_u, lat_u = proj(x_u, y_u, inverse=True)
+            lon_v, lat_v = proj(x_v, y_v, inverse=True)
+            lon_psi, lat_psi = lon_vert[1:-1, 1:-1], lat_vert[1:-1, 1:-1]
+        elif get_vert:
+            # Fetch vert points from rho points. These values are approximated.
+            x_psi = 0.25*(x[1:, 1:] + x[:-1, 1:] + x[1:, :-1] + x[:-1, :-1])
+            y_psi = 0.25*(y[1:, 1:] + y[:-1, 1:] + y[1:, :-1] + y[:-1, :-1])
+            x_vert = np.zeros((nypts+1, nxpts+1))
+            y_vert = np.zeros((nypts+1, nxpts+1))
+            x_vert[1:-1, 1:-1], y_vert[1:-1, 1:-1] = x_psi, y_psi
+
+            # Edges
+            x_vert[0, 1:-1] = x[0, 1:] + x[0, :-1] - x_psi[0]
+            y_vert[0, 1:-1] = y[0, 1:] + y[0, :-1] - y_psi[0]
+            x_vert[-1, 1:-1] = x[-1, 1:] + x[-1, :-1] - x_psi[-1]
+            y_vert[-1, 1:-1] = y[-1, 1:] + y[-1, :-1] - y_psi[-1]
+            x_vert[1:-1, 0] = x[1:, 0] + x[:-1, 0] - x_psi[:, 0]
+            y_vert[1:-1, 0] = y[1:, 0] + y[:-1, 0] - y_psi[:, 0]
+            x_vert[1:-1, -1] = x[1:, -1] + x[:-1, -1] - x_psi[:, -1]
+            y_vert[1:-1, -1] = y[1:, -1] + y[:-1, -1] - y_psi[:, -1]
+
+            # Corners
+            x_vert[0, 0] = \
+                4*x[0, 0] - x_vert[0, 1] - x_vert[1, 0] - x_vert[1, 1]
+            y_vert[0, 0] = \
+                4*y[0, 0] - y_vert[0, 1] - y_vert[1, 0] - y_vert[1, 1]
+            x_vert[-1, 0] = \
+                4*x[-1, 0] - x_vert[-1, 1] - x_vert[-2, 0] - x_vert[-2, 1]
+            y_vert[-1, 0] = \
+                4*y[-1, 0] - y_vert[-1, 1] - y_vert[-2, 0] - y_vert[-2, 1]
+            x_vert[0, -1] = \
+                4*x[0, -1] - x_vert[1, -1] - x_vert[0, -2] - x_vert[1, -2]
+            y_vert[0, -1] = \
+                4*y[0, -1] - y_vert[1, -1] - y_vert[0, -2] - y_vert[1, -2]
+            x_vert[-1, -1] = \
+                4*x[-1, -1] - x_vert[-1, -2] - x_vert[-2, -1] - x_vert[-2, -2]
+            y_vert[-1, -1] = \
+                4*y[-1, -1] - y_vert[-1, -2] - y_vert[-2, -1] - y_vert[-2, -2]
+
+            # u/v faces
+            x_u = 0.5*(x_vert[1:, 1:-1] + x_vert[:-1, 1:-1])
+            y_u = 0.5*(y_vert[1:, 1:-1] + y_vert[:-1, 1:-1])
+            x_v = 0.5*(x_vert[1:-1, 1:] + x_vert[1:-1, :-1])
+            y_v = 0.5*(y_vert[1:-1, 1:] + y_vert[1:-1, :-1])
+
+            # Projection transform
+            lon_u, lat_u = proj(x_u, y_u, inverse=True)
+            lon_v, lat_v = proj(x_v, y_v, inverse=True)
+            lon_vert, lat_vert = proj(x_vert, y_vert, inverse=True)
+            lon_psi, lat_psi = lon_vert[1:-1, 1:-1], lat_vert[1:-1, 1:-1]
+
         # Pass in geographic information to a DataArray
         ds_locs = Dataset()
-        ds_locs['lon'] = DataArray(lon, dims=('yc', 'xc'))
-        ds_locs['lat'] = DataArray(lat, dims=('yc', 'xc'))
-        ds_locs['x'] = DataArray(x, dims=('yc', 'xc'))
-        ds_locs['y'] = DataArray(y, dims=('yc', 'xc'))
+        ds_locs['lon'] = DataArray(lon, dims=('eta_rho', 'xi_rho'))
+        ds_locs['lat'] = DataArray(lat, dims=('eta_rho', 'xi_rho'))
+        ds_locs['x'] = DataArray(x, dims=('eta_rho', 'xi_rho'))
+        ds_locs['y'] = DataArray(y, dims=('eta_rho', 'xi_rho'))
 
+        # Make these alias for ROMS convention
+        ds_locs['lon_rho'], ds_locs['lat_rho'] = ds_locs.lon, ds_locs.lat
+        ds_locs['x_rho'], ds_locs['y_rho'] = ds_locs.x, ds_locs.y
+
+        # If time is provided, also set -ocean_time- in the locs
         if time is not None:
             time = np.asarray(time)
             ds_locs['ocean_time'] = DataArray(time, dims=('ocean_time'))
 
-        # Assign coordiantes
-        ds_locs = ds_locs.assign_coords(yc=np.arange(nypts)+0.5)
-        ds_locs = ds_locs.assign_coords(xc=np.arange(nxpts)+0.5)
+        # Assign coordiantes (as ROMS convention)
+        ds_locs = ds_locs.assign_coords(eta_rho=np.arange(nypts)+0.5)
+        ds_locs = ds_locs.assign_coords(xi_rho=np.arange(nxpts)+0.5)
 
-        if get_vert:
-            xx, yx = 0.5*(x[:, 1:]+x[:, :-1]), 0.5*(y[:, 1:]+y[:, :-1])
-            xy, yy = 0.5*(x[1:, :]+x[:-1, :]), 0.5*(y[1:, :]+y[:-1, :])
-            xv, yv = np.zeros((nypts+1, nxpts+1)), np.zeros((nypts+1, nxpts+1))
-            xv[1:-1, 1:-1] = 0.25*(x[1:, 1:]+x[:-1, 1:]+x[1:, :-1]+x[:-1, :-1])
-            yv[1:-1, 1:-1] = 0.25*(y[1:, 1:]+y[:-1, 1:]+y[1:, :-1]+y[:-1, :-1])
-            xv[0, 1:-1] = 2*xx[0, :] - xv[1, 1:-1]
-            yv[0, 1:-1] = 2*yx[0, :] - yv[1, 1:-1]
-            xv[-1, 1:-1] = 2*xx[-1, :] - xv[-2, 1:-1]
-            yv[-1, 1:-1] = 2*yx[-1, :] - yv[-2, 1:-1]
-            xv[1:-1, 0] = 2*xy[:, 0] - xv[1:-1, 1]
-            yv[1:-1, 0] = 2*yy[:, 0] - yv[1:-1, 1]
-            xv[1:-1, -1] = 2*xy[:, -1] - xv[1:-1, -2]
-            yv[1:-1, -1] = 2*yy[:, -1] - yv[1:-1, -2]
-            xv[0, 0] = 4*x[0, 0] - xv[0, 1] - xv[1, 0] - xv[1, 1]
-            yv[0, 0] = 4*y[0, 0] - yv[0, 1] - yv[1, 0] - yv[1, 1]
-            xv[-1, 0] = 4*x[-1, 0] - xv[-1, 1] - xv[-2, 0] - xv[-2, 1]
-            yv[-1, 0] = 4*y[-1, 0] - yv[-1, 1] - yv[-2, 0] - yv[-2, 1]
-            xv[0, -1] = 4*x[0, -1] - xv[1, -1] - xv[0, -2] - xv[1, -2]
-            yv[0, -1] = 4*y[0, -1] - yv[1, -1] - yv[0, -2] - yv[1, -2]
-            xv[-1, -1] = 4*x[-1, -1] - xv[-1, -2] - xv[-2, -1] - xv[-2, -2]
-            yv[-1, -1] = 4*y[-1, -1] - yv[-1, -2] - yv[-2, -1] - yv[-2, -2]
-            lonv, latv = proj(xv, yv, inverse=True)
-            if lon.max() > 180:
-                lonv = lonv % 360
+        # Calculate angles, grid metrics if vert points provided
+        if is_vert or get_vert:
+            # Angles from x-positive
             angle_xy = np.arctan2(
-                np.diff(0.5*(yv[1:, :]+yv[:-1, :])),
-                np.diff(0.5*(xv[1:, :]+xv[:-1, :])))
-            ds_locs['lon_vert'] = DataArray(lonv, dims=('yb', 'xb'))
-            ds_locs['lat_vert'] = DataArray(latv, dims=('yb', 'xb'))
-            ds_locs['x_vert'] = DataArray(xv, dims=('yb', 'xb'))
-            ds_locs['y_vert'] = DataArray(yv, dims=('yb', 'xb'))
-            ds_locs['angle_xyr'] = DataArray(angle_xy, dims=('yc', 'xc'))
-            ds_locs = ds_locs.assign_coords(yb=np.arange(nypts+1))
-            ds_locs = ds_locs.assign_coords(xb=np.arange(nxpts+1))
+                np.diff(0.5*(y_vert[1:, :]+y_vert[:-1, :])),
+                np.diff(0.5*(x_vert[1:, :]+x_vert[:-1, :])))
+
+            # Angles from true east
+            geod = pyproj.Geod(ellps=proj.crs.ellipsoid.name.replace(' ', ''))
+            angle, _, _ = geod.inv(
+                lon_vert[:, :-1], lat_vert[:, :-1],
+                lon_vert[:, 1:], lat_vert[:, 1:])
+            angle = (90.-angle)*np.pi/180.
+            angle = np.cos(angle) + np.sin(angle)*1j
+            angle = np.angle(0.5*(angle[1:, :] + angle[:-1, :]))
+
+            # Grid metrics
+            _, _, dx = geod.inv(lon_vert[:, 1:], lat_vert[:, 1:],
+                                lon_vert[:, :-1], lat_vert[:, :-1])
+            dx = 0.5*(dx[1:, :]+dx[:-1, :])
+            _, _, dy = geod.inv(lon_vert[1:, :], lat_vert[1:, :],
+                                lon_vert[:-1, :], lat_vert[:-1, :])
+            dy = 0.5*(dy[:, 1:]+dy[:, :-1])
+
+            # Pass in these info to Dataset
+            ds_locs['lon_vert'] = \
+                DataArray(lon_vert, dims=('eta_vert', 'xi_vert'))
+            ds_locs['lat_vert'] = \
+                DataArray(lat_vert, dims=('eta_vert', 'xi_vert'))
+            ds_locs['lon_u'] = DataArray(lon_u, dims=('eta_u', 'xi_u'))
+            ds_locs['lat_u'] = DataArray(lat_u, dims=('eta_u', 'xi_u'))
+            ds_locs['lon_v'] = DataArray(lon_v, dims=('eta_v', 'xi_v'))
+            ds_locs['lat_v'] = DataArray(lat_v, dims=('eta_v', 'xi_v'))
+            ds_locs['lon_psi'] = DataArray(lon_psi, dims=('eta_psi', 'xi_psi'))
+            ds_locs['lat_psi'] = DataArray(lat_psi, dims=('eta_psi', 'xi_psi'))
+
+            ds_locs['x_vert'] = DataArray(x_vert, dims=('eta_vert', 'xi_vert'))
+            ds_locs['y_vert'] = DataArray(y_vert, dims=('eta_vert', 'xi_vert'))
+            ds_locs['x_u'] = DataArray(x_u, dims=('eta_u', 'xi_u'))
+            ds_locs['y_u'] = DataArray(y_u, dims=('eta_u', 'xi_u'))
+            ds_locs['x_v'] = DataArray(x_v, dims=('eta_v', 'xi_v'))
+            ds_locs['y_v'] = DataArray(y_v, dims=('eta_v', 'xi_v'))
+            ds_locs['x_psi'] = DataArray(x_psi, dims=('eta_psi', 'xi_psi'))
+            ds_locs['y_psi'] = DataArray(y_psi, dims=('eta_psi', 'xi_psi'))
+
+            ds_locs['angle_xyr'] = \
+                DataArray(angle_xy, dims=('eta_rho', 'xi_rho'))
+            ds_locs['angler'] = \
+                DataArray(angle, dims=('eta_rho', 'xi_rho'))
+
+            ds_locs['pm'] = DataArray(1./dx, dims=('eta_rho', 'xi_rho'))
+            ds_locs['pn'] = DataArray(1./dy, dims=('eta_rho', 'xi_rho'))
+
+            # Assign coordiantes (as ROMS convention)
+            ds_locs = ds_locs.assign_coords(eta_vert=np.arange(nypts+1))
+            ds_locs = ds_locs.assign_coords(xi_vert=np.arange(nxpts+1))
+            ds_locs = ds_locs.assign_coords(eta_u=np.arange(nypts)+0.5)
+            ds_locs = ds_locs.assign_coords(xi_u=np.arange(1, nxpts))
+            ds_locs = ds_locs.assign_coords(eta_v=np.arange(1, nypts))
+            ds_locs = ds_locs.assign_coords(xi_v=np.arange(nxpts)+0.5)
+            ds_locs = ds_locs.assign_coords(eta_psi=np.arange(1, nypts))
+            ds_locs = ds_locs.assign_coords(xi_psi=np.arange(1, nxpts))
 
         return ds_locs
 
@@ -313,11 +465,14 @@ class ROMSAccessor:
         """
         Extract station profiles from ROMS Dataset.
 
-        ds = roms.station(lon, lat)
+        dout = roms.station(lon, lat, time=None)
+
         Inputs:
-            lon, lat - float points of longitude/latitude
+            lon, lat        - float points of longitude/latitude
+            time (optional) - 1-D list of time
+
         Output:
-            ds - station Dataset.
+            dout            - station Dataset
         """
         proj = pyproj.Proj(self._obj.attrs['proj4_init'])
         x, y = proj(lon, lat)
@@ -398,6 +553,17 @@ class ROMSAccessor:
         return dout
 
     def _indexer(self, ds_locs):
+        """
+        Calculate the fractional index ETA/XI from any given x/y.
+
+        eta, xi = _indexer(ds_locs)
+
+        Input:
+            ds_locs - output argument from set_locs() or set_locs2d()
+
+        Outputs:
+            eta, xi - fractional coordinates in eta/xi direction
+        """
         # Calculate disctance array and find the integer part of coordiantes.
         # eta0, xi0 are the coords of left bottom corner.
         if self._is_dataset:
@@ -426,7 +592,6 @@ class ROMSAccessor:
             c = np.array([xx-xv[ei, xi], yy-yv[ei, xi]])
             efrac = np.dot(ivec, c)/(np.dot(ivec, ivec))
             xfrac = np.dot(jvec, c)/(np.dot(jvec, jvec))
-
             eta_loc.append(ei + eta0 + efrac)
             xi_loc.append(xi + xi0 + xfrac)
 
@@ -435,6 +600,18 @@ class ROMSAccessor:
         return eta, xi
 
     def _interp(self, ds_locs):
+        """
+        General hrizontal interpolator.
+
+        dout = _interp(ds_locs)
+
+        Input:
+            ds_locs - output argument from set_locs() or set_locs2d()
+
+        Output:
+            dout    - interpolated DataArray/Dataset
+        """
+        # Get target coordinates in fractional space
         eta, xi = self._indexer(ds_locs)
 
         # Perform interpolation using Xarray's interp method
@@ -482,10 +659,29 @@ class ROMSAccessor:
 
         # Add extra coordinates
         dout.coords['eta'], dout.coords['xi'] = eta, xi
-        dout.coords['lon_vert'] = ds_locs.lon_vert
-        dout.coords['lat_vert'] = ds_locs.lat_vert
-        dout.coords['x_vert'] = ds_locs.x_vert
-        dout.coords['y_vert'] = ds_locs.y_vert
+        if self._is_dataset:
+            for c in ['lon', 'lat', 'x', 'y']:
+                for hpos in ['_rho', '_vert']:
+                    dout.coords[c + hpos] = ds_locs[c + hpos]
+        else:
+            for c in ['lon', 'lat', 'x', 'y']:
+                dout.coords[c + '_rho'] = ds_locs[c + '_rho']
+        for var in ['angle_xyr', 'angler']:
+            dout.coords[var] = ds_locs[var]
+        for var in ['h', 'zice', 'zeta']:
+            if var in dout.coords:
+                dout.coords[var + '_rho'] = dout[var]
+
+        # Rotate velocities to allign with along/cross directions
+        if self._is_dataset:
+            ar = dout.angle - dout.angler
+            dout.coords['angle_rot'] = ar
+            if 'u' in dout and 'v' in dout:
+                dout['u_rot'] = dout.u*np.cos(ar) - dout.v*np.sin(ar)
+                dout['v_rot'] = dout.v*np.cos(ar) + dout.u*np.sin(ar)
+            if 'ubar' in dout and 'vbar' in dout:
+                dout['ubar_rot'] = dout.ubar*np.cos(ar) - dout.vbar*np.sin(ar)
+                dout['vbar_rot'] = dout.vbar*np.cos(ar) + dout.ubar*np.sin(ar)
         return dout
 
     def interp(self, lon, lat, time=None):
@@ -493,72 +689,55 @@ class ROMSAccessor:
         Horizontal interpolation method for ROMS Dataset.
 
         ds = roms.interp(lon, lat, time=None)
+
         Inputs:
-            lon, lat - 1-D list of longitude/latitude
+            lon, lat        - 1-D list of longitude/latitude
             time (optional) - 1-D list of time
+
         Output:
-            ds - interpolated Dataset.
+            dout            - interpolated Dataset.
         """
         ds_locs = self.set_locs(lon, lat, time, get_vert=True)
         dout = self._interp(ds_locs)
-        dout.coords['track'] = ds_locs.track
-        dout.coords['distance'] = ds_locs.distance
 
-        # Rotate velocities to allign with along/cross directions
-        if self._is_dataset:
-            geod = pyproj.Geod(ellps='WGS84')
-            angle, _, _ = geod.inv(
-                ds_locs.lon_vert[:-1], ds_locs.lat_vert[:-1],
-                ds_locs.lon_vert[1:], ds_locs.lat_vert[1:])
-            angle = (90.-angle)*np.pi/180.
-            ar = dout.angle - angle
-            dout['angle_rot'] = ar
-
-            if 'u' in dout and 'v' in dout:
-                dout['u_rot'] = dout.u*np.cos(ar) - dout.v*np.sin(ar)
-                dout['v_rot'] = dout.v*np.cos(ar) + dout.u*np.sin(ar)
-            if 'ubar' in dout and 'vbar' in dout:
-                dout['ubar_rot'] = dout.ubar*np.cos(ar) - dout.vbar*np.sin(ar)
-                dout['vbar_rot'] = dout.vbar*np.cos(ar) + dout.ubar*np.sin(ar)
+        # Add extra coordinates
+        for var in ['track', 'distance', 'track_vert', 'distance_vert']:
+            dout.coords[var] = ds_locs[var]
         return dout
 
-    def interp2d(self, lon, lat, time=None):
+    def interp2d(self, lon, lat, time=None, is_vert=False, geo=True):
         """
         Horizontal interpolation method for ROMS Dataset.
 
         ds = roms.interp(lon, lat, time=None)
+
         Inputs:
-            lon, lat - 2-D array of longitude/latitude
+            lon, lat        - 2-D array of longitude/latitude
             time (optional) - 1-D list of time
+            is_vert         - if the input coordinates are at vert points
+            geo             - if the input arguments lon/lat are
+                              geographical or cartisian
+
         Output:
-            ds - interpolated Dataset.
+            dout            - interpolated Dataset.
         """
-        ds_locs = self.set_locs2d(lon, lat, time, get_vert=True)
-        ds_locs = ds_locs.stack(track=('yc', 'xc'))
+        ds_locs = self.set_locs2d(lon, lat, time,
+                                  is_vert=is_vert, get_vert=True, geo=geo)
+        ds_locs = ds_locs.stack(track=('eta_rho', 'xi_rho'))
         dout = self._interp(ds_locs)
         dout = dout.assign_coords(track=ds_locs.track)
         dout = dout.unstack('track')
         ds_locs = ds_locs.unstack('track')
-        dout.coords['angle_xyr'] = ds_locs.angle_xyr
 
-        # Rotate velocities to allign with along/cross directions
+        # Add extra coordinates for ROMS convention
         if self._is_dataset:
-            geod = pyproj.Geod(ellps='WGS84')
-            angle, _, _ = geod.inv(
-                ds_locs.lon_vert[:, :-1], ds_locs.lat_vert[:, :-1],
-                ds_locs.lon_vert[:, 1:], ds_locs.lat_vert[:, 1:])
-            angle = (90.-angle)*np.pi/180.
-            angle = np.cos(angle) + np.sin(angle)*1j
-            angle = np.angle(0.5*(angle[1:, :] + angle[:-1, :]))
-            ar = dout.angle - angle
-            dout['angle_rot'] = ar
+            for hpos in ['_u', '_v', '_psi']:
+                for var in ['lon', 'lat', 'x', 'y']:
+                    dout.coords[var + hpos] = ds_locs[var + hpos]
 
-            if 'u' in dout and 'v' in dout:
-                dout['u_rot'] = dout.u*np.cos(ar) - dout.v*np.sin(ar)
-                dout['v_rot'] = dout.v*np.cos(ar) + dout.u*np.sin(ar)
-            if 'ubar' in dout and 'vbar' in dout:
-                dout['ubar_rot'] = dout.ubar*np.cos(ar) - dout.vbar*np.sin(ar)
-                dout['vbar_rot'] = dout.vbar*np.cos(ar) + dout.ubar*np.sin(ar)
+        # Add grid metrics for ROMS convention
+        for var in ['pm', 'pn']:
+            dout.coords[var] = ds_locs[var]
         return dout
 
     def longitude_wrap(self):
@@ -568,7 +747,7 @@ class ROMSAccessor:
 
         ds.longitude_wrap()
         """
-        for lon in ['lon_rho', 'lon_psi', 'lon_u', 'lon_v', 'lon_vert']:
+        for lon in ['lon', 'lon_rho', 'lon_psi', 'lon_u', 'lon_v', 'lon_vert']:
             if lon in self._obj.coords:
                 attrs = self._obj[lon].attrs
                 if self._obj.coords[lon].max() > 180.:
@@ -577,33 +756,49 @@ class ROMSAccessor:
                 elif self._obj.coords[lon].min() < 0.:
                     self._obj.coords[lon] = self._obj[lon] % 360
                     self._obj[lon].attrs = attrs
+        return
 
-    def isoline(self, xi0, eta0, depth, dis_max, idx_type='lonlat'):
+    def isobath(self, xi0: float, eta0: float, depth: float, dis_max: float,
+                idx_type: str = 'lonlat'):
         """
-        Get isoline coordinates.
+        Calculate isobath coordinates.
+
+        x, y = isobath(xi0, eta0, depth, dis_max, idx_type='lonlat')
+
+        Inputs:
+            xi0, eta0 - coordinates of center points. Nearest isobath will
+                        be extracted
+            depth     - depth of the isobath to be extraced
+            dis_max   - maximum range in meters to fetch the isobath
+            idx_type  - type of the the input coordinates xi0/eta0. One of
+                        ['lonlat', 'index', 'xy'], default is lonlat
+
+        Outputs:
+            x, y      - coordinates of the isobath
         """
         fig, ax = plt.subplots()
         ct = ax.contour(self.x, self.y, self.h, [depth], colors='k')
-        isolines = ct.allsegs[0]
+        isobaths = ct.allsegs[0]
         plt.close(fig)
 
         if idx_type == 'lonlat':
             proj = pyproj.Proj(self._obj.attrs['proj4_init'])
             x0, y0 = proj(xi0, eta0)
         elif idx_type == 'index':
-            x0 = self.x.interp(eta_rho=eta0, xi_rho=xi0)
-            y0 = self.x.interp(eta_rho=eta0, xi_rho=xi0)
+            interp_coords = {self.eta_nam: eta0, self.xi_nam: xi0}
+            x0 = self.x.interp(interp_coords).item()
+            y0 = self.y.interp(interp_coords).item()
         elif idx_type == 'xy':
             x0, y0 = xi0, eta0
         else:
             raise ValueError('Unknown index type.')
 
         dis_min = []
-        for i in range(len(isolines)):
-            x, y = isolines[i].T
+        for i in range(len(isobaths)):
+            x, y = isobaths[i].T
             dis_min.append(np.hypot(x-x0, y-y0).min())
         idx = np.argmin(np.array(dis_min))
-        x, y = isolines[idx].T
+        x, y = isobaths[idx].T
         in_range = np.where(np.hypot(x-x0, y-y0) <= dis_max)[0]
         idx0, idx1 = in_range[0], in_range[-1]
         return x[idx0:idx1], y[idx0:idx1]
@@ -665,12 +860,25 @@ class ROMSDatasetAccessor(ROMSAccessor):
         # TODO
         return
 
-    def uv_rotate(self, uvar='u', vvar='v'):
+    def uv_rotate(self, uvar: str = 'u', vvar: str = 'v', geo: bool = False):
         """
-        Rotate U/V velocity from XI/ETA coordinates to X/Y coordinates
+        Rotate U/V velocity from XI/ETA coordinates to X/Y or Lon/Lat
+        coordinates
+
+        u_rot, v_rot = uv_rotate(uvar='u', vvar='v', geo=False)
+
+        Inputs:
+            uvar, vvar   - name of variables to be rotated
+            geo          - if rotate to Lon/Lat or X/Y coordinates
+
+        Outputs:
+            u_rot, v_rot - rotated velocity
         """
-        angle = self._obj.angle_xy
-        udims, vdims = self._obj.u.dims, self._obj.v.dims
+        if geo:
+            angle = self._obj.angle
+        else:
+            angle = self._obj.angle_xy
+        udims, vdims = self._obj[uvar].dims, self._obj[vvar].dims
         if 'xi_rho' in udims and 'eta_rho' in udims and \
            'xi_rho' in vdims and 'eta_rho' in vdims:
             u, v = self._obj[uvar], self._obj[vvar]
@@ -680,11 +888,22 @@ class ROMSDatasetAccessor(ROMSAccessor):
             v = self._obj[vvar].interp(dict(xi_v=self._obj.xi_rho,
                                             eta_v=self._obj.eta_rho))
 
-        u_x = u*np.cos(angle) - v*np.sin(angle)
-        v_y = v*np.cos(angle) + u*np.sin(angle)
-        return u_x, v_y
+        u_rot = u*np.cos(angle) - v*np.sin(angle)
+        v_rot = v*np.cos(angle) + u*np.sin(angle)
+        return u_rot, v_rot
 
-    def zr_to_zw(self, var):
+    def zr_to_zw(self, var: str):
+        """
+        Interpolate/extrapolate variable from RHO-points to W-points.
+
+        var_out = zr_to_zw(var)
+
+        Inputs:
+            var     - name of variable to be interpolated
+
+        Outputs:
+            var_out - interpolated variable at W-points
+        """
         hpos = _find_hpos(self._obj[var])
         if hpos == '_rho':
             zr, zw = self.z_r_rho, self.z_w_rho
@@ -695,16 +914,22 @@ class ROMSDatasetAccessor(ROMSAccessor):
         elif hpos == '_psi':
             zr, zw = self.z_r_psi, self.z_w_psi
 
-        out = xr.apply_ufunc(
-            _interp1d,
-            self._obj[var], zr, zw,
-            input_core_dims=[['s_rho'], ['s_rho'], ['s_w']],
-            output_core_dims=[['s_w']],
-            exclude_dims=set(('s_rho',)),
-            dask='parallelized')
-        return out.transpose(*zw.dims)
+        if var == '_z_r' + hpos:
+            return zw
+        else:
+            out = xr.apply_ufunc(
+                _interp1d,
+                self._obj[var], zr, zw,
+                input_core_dims=[['s_rho'], ['s_rho'], ['s_w']],
+                output_core_dims=[['s_w']],
+                exclude_dims=set(('s_rho',)),
+                dask='parallelized')
+            return out.transpose(*zw.dims)
 
-    def vgrad(self, var):
+    def vgradz(self, var: str):
+        """
+        Calculate vertical gradient in Z-coordinate.
+        """
         vpos = _find_vpos(self._obj[var])
         hpos = _find_hpos(self._obj[var])
         if vpos == '_r':
@@ -719,10 +944,41 @@ class ROMSDatasetAccessor(ROMSAccessor):
             dz = self.dz_v
         elif hpos == '_psi':
             dz = self.dz_psi
-        ddz = dva/dz
-        return ddz
+        return dva/dz
 
-    def hgrad(self, var, direction='both', conserve=True):
+    def vgradp(self, var: str):
+        """
+        Calculate vertical gradient in P-coordinate.
+        """
+        vpos = _find_vpos(self._obj[var])
+        hpos = _find_hpos(self._obj[var])
+        if vpos == '_r':
+            dva = self.zr_to_zw(var).diff(dim='s_w').data
+        elif vpos == '_w':
+            dva = self._obj[var].diff(dim='s_w').data
+        dp = -9.81*(self._obj.rho + 1000.)*self.dz_rho
+        if hpos != '_rho':
+            dp = dp.interp(eta_rho=self._obj['eta' + hpos],
+                           xi_rho=self._obj['xi' + hpos])
+        return dva/dp
+
+    def hgrads(self, var: str, direction: str = 'both', conserve: bool = True):
+        """
+        Calculate vertical gradients along S-coordinate.
+
+        ddx, ddy = hgrads(var, direction='both', conserve=True)
+
+        Inputs:
+            var       - name of variables to calculate gradient
+            direction - along which direction [ETA/XI] to calculate gradient.
+                        One of ['both', 'x', 'y']. If direction == 'both',
+                        then the output will contain two DataArrays, otherwise
+                        it will only contain one DataArray
+            conserve  - if weight by grid size
+
+        Outputs:
+            ddx, ddy  - gradients along S-coordinate
+        """
         ndim = self._obj[var].ndim
         hpos = _find_hpos(self._obj[var])
 
@@ -752,8 +1008,7 @@ class ROMSDatasetAccessor(ROMSAccessor):
 
         slc, pad_width = (), ()
         for i in range(ndim-2):
-            slc = slc + (slice(None),)
-            pad_width = pad_width + ((0, 0),)
+            slc, pad_width = slc + (slice(None),), pad_width + ((0, 0),)
         slcx0 = (slice(None), slice(1, None))
         slcx1 = (slice(None), slice(None, -1))
         slcy0 = (slice(1, None), slice(None))
@@ -765,18 +1020,14 @@ class ROMSDatasetAccessor(ROMSAccessor):
             facx = 0.25 * (pn[:, 1:] + pn[:, :-1]) * (pm[:, 1:] + pm[:, :-1])
             facy = 0.25 * (pm[1:, :] + pm[:-1, :]) * (pn[1:, :] + pn[:-1, :])
             if direction in ['both', 'x']:
-                ddx = (va[slc + slcx0]/pn[slcx0]-va[slc + slcx1]/pn[slcx1]) * \
-                      facx
+                ddx = (va[slc+slcx0]/pn[slcx0]-va[slc+slcx1]/pn[slcx1])*facx
             if direction in ['both', 'y']:
-                ddy = (va[slc + slcy0]/pm[slcy0]-va[slc + slcy1]/pm[slcy1]) * \
-                      facy
+                ddy = (va[slc+slcy0]/pm[slcy0]-va[slc+slcy1]/pm[slcy1])*facy
         else:
             if direction in ['both', 'x']:
-                ddx = (va[slc + slcx0]-va[slc + slcx1]) * \
-                      0.5*(pm[slcx0]+pm[slcx1])
+                ddx = (va[slc+slcx0]-va[slc+slcx1])*0.5*(pm[slcx0]+pm[slcx1])
             if direction in ['both', 'y']:
-                ddy = (va[slc + slcy0]-va[slc + slcy1]) * \
-                      0.5*(pn[slcy0]+pn[slcy1])
+                ddy = (va[slc+slcy0]-va[slc+slcy1])*0.5*(pn[slcy0]+pn[slcy1])
 
         if direction in ['both', 'x']:
             if hpos in ['_u', '_psi']:
@@ -798,14 +1049,29 @@ class ROMSDatasetAccessor(ROMSAccessor):
         else:
             return
 
-    def hgrad3d(self, var, direction='both'):
+    def hgradz(self, var, direction='both', conserve=True):
+        """
+        Calculate vertical gradients along Z-coordinate.
+
+        ddx, ddy = hgrads(var, direction='both', conserve=True)
+
+        Inputs:
+            var       - name of variables to calculate gradient
+            direction - along which direction [ETA/XI] to calculate gradient.
+                        One of ['both', 'x', 'y']. If direction == 'both',
+                        then the output will contain two DataArrays, otherwise
+                        it will only contain one DataArray
+            conserve  - if weight by grid size
+        Outputs:
+            ddx, ddy  - gradients along Z-coordinate
+        """
         vpos = _find_vpos(self._obj[var])
         hpos = _find_hpos(self._obj[var])
 
-        dvdx, dvdy = self.hgrad(var, 'both')
+        ddxs, ddys = self.hgrads(var, 'both', conserve=conserve)
         if vpos == '_w':
-            dvdx = dvdx.interp(s_w=self._obj.s_rho)
-            dvdy = dvdy.interp(s_w=self._obj.s_rho)
+            ddxs = ddxs.interp(s_w=self._obj.s_rho)
+            ddys = ddys.interp(s_w=self._obj.s_rho)
 
         if hpos == '_rho':
             _ = self.z_r_rho
@@ -815,20 +1081,22 @@ class ROMSDatasetAccessor(ROMSAccessor):
             _ = self.z_r_v
         elif hpos == '_psi':
             _ = self.z_r_psi
-        dzdx, dzdy = self.hgrad('_z_r' + hpos)
+        dzdxs, dzdys = self.hgrads('_z_r' + hpos, conserve=conserve)
 
-        dvdz = self.vgrad(var)
+        dvdz = self.vgradz(var)
         coord_transx = {'_rho': '_u', '_u': '_rho', '_v': '_psi', '_psi': '_v'}
         coord_transy = {'_rho': '_v', '_v': '_rho', '_u': '_psi', '_psi': '_u'}
-        dvdzx = dvdz.interp(
+        dvdz_x = dvdz.interp(
             {'xi' + hpos: self._obj['xi' + coord_transx[hpos]],
              'eta' + hpos: self._obj['eta' + coord_transx[hpos]]})
-        dvdzy = dvdz.interp(
+        dvdz_y = dvdz.interp(
             {'xi' + hpos: self._obj['xi' + coord_transy[hpos]],
              'eta' + hpos: self._obj['eta' + coord_transy[hpos]]})
 
-        ddx = dvdx - dzdx*dvdzx
-        ddy = dvdy - dzdy*dvdzy
+        ddx, ddy = ddxs - dzdxs*dvdz_x, ddys - dzdys*dvdz_y
+
+        ddx = ddx.drop(('eta_rho', 'xi_rho'))
+        ddy = ddy.drop(('eta_rho', 'xi_rho'))
 
         if direction == 'both':
             return ddx, ddy
@@ -839,91 +1107,142 @@ class ROMSDatasetAccessor(ROMSAccessor):
         else:
             return
 
-    def hgrad_x(self, var):
-        coord_trans = {'_rho': '_u', '_u': '_rho', '_v': '_psi', '_psi': '_v'}
+    def hgradp(self, var, direction='both', conserve=True):
+        """
+        Calculate vertical gradients along P-coordinate.
 
-        ndim = self._obj[var].ndim
+        ddx, ddy = hgrads(var, direction='both', conserve=True)
+
+        Inputs:
+            var       - name of variables to calculate gradient
+            direction - along which direction [ETA/XI] to calculate gradient.
+                        One of ['both', 'x', 'y']. If direction == 'both',
+                        then the output will contain two DataArrays, otherwise
+                        it will only contain one DataArray
+            conserve  - if weight by grid size
+        Outputs:
+            ddx, ddy  - gradients along P-coordinate
+        """
+        vpos = _find_vpos(self._obj[var])
         hpos = _find_hpos(self._obj[var])
-        fpos = coord_trans[hpos]
-        feta, fxi = 'eta' + fpos, 'xi' + fpos
-        dims = self._obj[var].dims[:-2] + (feta, fxi)
-        coords = {}
-        for idim in dims:
-            coords[idim] = self._obj[idim]
+
+        ddxs, ddys = self.hgrads(var, 'both', conserve=conserve)
+        if vpos == '_w':
+            ddxs = ddxs.interp(s_w=self._obj.s_rho)
+            ddys = ddys.interp(s_w=self._obj.s_rho)
 
         if hpos == '_rho':
-            pm, pn = self._obj.pm.data, self._obj.pn.data
+            _ = self.p_r_rho
+        elif hpos == '_u':
+            _ = self.p_r_u
+        elif hpos == '_v':
+            _ = self.p_r_v
+        elif hpos == '_psi':
+            _ = self.p_r_psi
+        dpdxs, dpdys = self.hgrads('_p_r' + hpos, conserve=conserve)
+
+        dvdp = self.vgradp(var)
+        coord_transx = {'_rho': '_u', '_u': '_rho', '_v': '_psi', '_psi': '_v'}
+        coord_transy = {'_rho': '_v', '_v': '_rho', '_u': '_psi', '_psi': '_u'}
+        dvdp_x = dvdp.interp(
+            {'xi' + hpos: self._obj['xi' + coord_transx[hpos]],
+             'eta' + hpos: self._obj['eta' + coord_transx[hpos]]})
+        dvdp_y = dvdp.interp(
+            {'xi' + hpos: self._obj['xi' + coord_transy[hpos]],
+             'eta' + hpos: self._obj['eta' + coord_transy[hpos]]})
+
+        ddx, ddy = ddxs - dpdxs*dvdp_x, ddys - dpdys*dvdp_y
+
+        ddx = ddx.drop(('eta_rho', 'xi_rho'))
+        ddy = ddy.drop(('eta_rho', 'xi_rho'))
+
+        if direction == 'both':
+            return ddx, ddy
+        elif direction == 'x':
+            return ddx
+        elif direction == 'y':
+            return ddy
         else:
-            eta, xi = self._obj['eta' + hpos], self._obj['xi' + hpos]
-            pm = self._obj.pm.interp(dict(eta_rho=eta, xi_rho=xi)).data
-            pn = self._obj.pn.interp(dict(eta_rho=eta, xi_rho=xi)).data
-        fac = 0.25 * (pn[:, 1:] + pn[:, :-1]) * (pm[:, 1:] + pm[:, :-1])
+            return
 
-        va = self._obj[var].data
-        if ndim == 2:
-            ddx = (va[:, 1:]/pn[:, 1:]-va[:, :-1]/pn[:, :-1])*fac
-            pad_width = ((0, 0), (1, 1))
-        elif ndim == 3:
-            ddx = (va[:, :, 1:]/pn[:, 1:]-va[:, :, :-1]/pn[:, :-1])*fac
-            pad_width = ((0, 0), (0, 0), (1, 1))
-        elif ndim == 4:
-            ddx = (va[:, :, :, 1:]/pn[:, 1:]-va[:, :, :, :-1]/pn[:, :-1])*fac
-            pad_width = ((0, 0), (0, 0), (0, 0), (1, 1))
+    """
+    Function alias
+    """
+    vgrad = vgradz
+    hgrad = hgrads
 
-        if hpos in ['_u', '_psi']:
-            ddx = np.pad(ddx, pad_width, constant_values=np.nan)
+    def geostrophic_flow(self):
+        """
+        Calcuate geostrophic_flow.
 
-        ddx = DataArray(data=ddx, dims=dims, coords=coords,
-                        attrs=dict(long_name='XI-direction gradient'))
-        return ddx
+        ug, vg = geostrophic_flow()
+        """
+        g = 9.81
+        # If hasn't calculated z and p coords at W-points, calculate them
+        if 'z_w_rho' not in self._obj:
+            _ = self.z_w
+        if 'p_w_rho' not in self._obj:
+            _ = self.p_w
 
-    def hgrad_y(self, var):
-        coord_trans = {'_rho': '_v', '_v': '_rho', '_u': '_psi', '_psi': '_u'}
+        # Calclate gradients
+        dzwdxs, dzwdys = self.hgrads('_z_w_rho', conserve=False)
+        dpwdxs, dpwdys = self.hgrads('_p_w_rho', conserve=False)
+        dzwdxs = dzwdxs.isel(s_w=slice(1, None)).rename(s_w='s_rho')
+        dzwdys = dzwdys.isel(s_w=slice(1, None)).rename(s_w='s_rho')
+        dpwdxs = dpwdxs.isel(s_w=slice(1, None)).rename(s_w='s_rho')
+        dpwdys = dpwdys.isel(s_w=slice(1, None)).rename(s_w='s_rho')
+        dzwdxs = dzwdxs.assign_coords(s_rho=self._obj.s_rho)
+        dzwdys = dzwdys.assign_coords(s_rho=self._obj.s_rho)
+        dpwdxs = dpwdxs.assign_coords(s_rho=self._obj.s_rho)
+        dpwdys = dpwdys.assign_coords(s_rho=self._obj.s_rho)
+        dzdp = -1./((self._obj.rho + 1000.)*9.81)
+        dzdp_x = dzdp.interp(eta_rho=self._obj.eta_u, xi_rho=self._obj.xi_u)
+        dzdp_y = dzdp.interp(eta_rho=self._obj.eta_v, xi_rho=self._obj.xi_v)
 
-        ndim = self._obj[var].ndim
-        hpos = _find_hpos(self._obj[var])
-        fpos = coord_trans[hpos]
-        feta, fxi = 'eta' + fpos, 'xi' + fpos
-        dims = self._obj[var].dims[:-2] + (feta, fxi)
-        coords = {}
-        for idim in dims:
-            coords[idim] = self._obj[idim]
+        # Calculate direvatives along isobars
+        dzdxp, dzdyp = dzwdxs - dpwdxs*dzdp_x, dzwdys - dpwdys*dzdp_y
 
-        if hpos == '_rho':
-            pm, pn = self._obj.pm.data, self._obj.pn.data
-        else:
-            eta, xi = self._obj['eta' + hpos], self._obj['xi' + hpos]
-            pm = self._obj.pm.interp(dict(eta_rho=eta, xi_rho=xi)).data
-            pn = self._obj.pn.interp(dict(eta_rho=eta, xi_rho=xi)).data
-        fac = 0.25 * (pm[1:, :] + pm[:-1, :]) * (pn[1:, :] + pn[:-1, :])
+        # Calculate geostrophic flow
+        ug = -dzdyp*g/self._obj.f.interp(eta_rho=self._obj.eta_v,
+                                         xi_rho=self._obj.xi_v)
+        vg = dzdxp*g/self._obj.f.interp(eta_rho=self._obj.eta_u,
+                                        xi_rho=self._obj.xi_u)
 
-        va = self._obj[var].data
-        if ndim == 2:
-            ddy = (va[1:, :]/pm[1:, :]-va[:-1, :]/pm[:-1, :])*fac
-            pad_width = ((1, 1), (0, 0))
-        elif ndim == 3:
-            ddy = (va[:, 1:, :]/pm[1:, :]-va[:, :-1, :]/pm[:-1, :])*fac
-            pad_width = ((0, 0), (1, 1), (0, 0))
-        elif ndim == 4:
-            ddy = (va[:, :, 1:, :]/pm[1:, :]-va[:, :, :-1, :]/pm[:-1, :])*fac
-            pad_width = ((0, 0), (0, 0), (1, 1), (0, 0))
+        # Interpolate ug/vg to the same coordinates of u/v (optional)
+        hpos = '_rho'
+        if 'u' in self._obj:
+            hpos = _find_hpos(self._obj.u)
+        elif 'ubar' in self._obj:
+            hpos = _find_hpos(self._obj.ubar)
+        if hpos != _find_hpos(ug):
+            ug = ug.drop(('eta' + hpos, 'xi' + hpos))
+            ug = ug.interp(eta_v=self._obj['eta' + hpos],
+                           xi_v=self._obj['xi' + hpos])
+        hpos = '_rho'
+        if 'v' in self._obj:
+            hpos = _find_hpos(self._obj.v)
+        elif 'vbar' in self._obj:
+            hpos = _find_hpos(self._obj.vbar)
+        if hpos != _find_hpos(vg):
+            vg = vg.drop(('eta' + hpos, 'xi' + hpos))
+            vg = vg.interp(eta_u=self._obj['eta' + hpos],
+                           xi_u=self._obj['xi' + hpos])
+        return ug, vg
 
-        if hpos in ['_v', '_psi']:
-            ddy = np.pad(ddy, pad_width, constant_values=np.nan)
-
-        ddy = DataArray(data=ddy, dims=dims, coords=coords,
-                        attrs=dict(long_name='ETA-direction gradient'))
-        return ddy
-
-    def vorticity(self, wind=False):
+    def vorticity(self, uvar: str = 'u', vvar: str = 'v'):
         """
         Calcuate relative_vorticity.
+
+        vort = vorticity(uvar='u', vvar='v')
+
+        Inputs:
+            uvar, vvar - name of variables to be rotated
+
+        Outputs:
+            vort       - relative vorticity
         """
         pm, pn = self._obj.pm.data, self._obj.pn.data
-        if wind:
-            u, v = self._obj.sustr.data, self._obj.svstr.data
-        else:
-            u, v = self._obj.ubar.data, self._obj.vbar.data
+        u, v = self._obj[uvar].data, self._obj[vvar].data
         ndim = u.ndim
         dx_u = 2./(pm[:, 1:] + pm[:, :-1])
         dy_v = 2./(pn[1:, :] + pn[:-1, :])
@@ -939,30 +1258,31 @@ class ROMSDatasetAccessor(ROMSAccessor):
             (dvdx - dude)
         if ndim == 3:
             self._obj['vorticity'] = DataArray(
-                    data=rvor,
-                    dims=['ocean_time', 'eta_psi', 'xi_psi'],
-                    attrs=dict(long_name='Vorticity',
-                               units='s-1'))
+                    data=rvor, dims=['ocean_time', 'eta_psi', 'xi_psi'],
+                    attrs=dict(long_name='Vorticity', units='s-1'))
         return self._obj.vorticity
 
-    def pressure(self):
+    def pressure_r(self):
         """
-        Caculate pressure.
+        Caculate pressure at RHO-points.
+        Hacked from Ln 298 in ROMS/Nonlinear/prsgrd32.h
+
+        prs = pressure_r()
         """
         g = 9.81
-        rho0 = 1025.
         drhodz = 0.00478
+        rho0 = 1025.
         GRho = g/rho0
         HalfGRho = 0.5*GRho
-        rho = self._obj.rho + 1000.
-        z_r = self.z_r
-        z_w = self.z_w
-        rho = rho.transpose('s_rho', ...)
-        z_r = z_r.transpose('s_rho', ...)
-        z_w = z_w.transpose('s_w', ...)
+
+        rho = self._obj.rho.transpose('s_rho', ...) + 1000.
+        z_r = self.z_r.transpose('s_rho', ...)
+        z_w = self.z_w.transpose('s_w', ...)
+
         dims = rho.dims
         coords = rho.coords
         rho, z_r, z_w = rho.data, z_r.data, z_w.data
+
         if 'zice' in self._obj:
             zice = self._obj.zice.data
         else:
@@ -993,26 +1313,53 @@ class ROMSDatasetAccessor(ROMSAccessor):
         prs = np.zeros(rho.shape)
         prs[-1] = ptop
         for i in range(prs.shape[0]-2, -1, -1):
-            delta_prs = HalfGRho * \
-                ((rho[i+1] + rho[i])*(z_r[i+1] - z_r[i]) -
-                 0.2*((dR[i+1] - dR[i]) *
-                      (z_r[i+1] - z_r[i] - 1./12.*(dZ[i+1]+dZ[i])) -
-                      (dZ[i+1] - dZ[i]) *
-                      (rho[i+1] - rho[i] - 1./12.*(dR[i+1]+dR[i]))
-                      )
-                 )
+            delta_prs = HalfGRho*((rho[i+1]+rho[i]) *
+                                  (z_r[i+1]-z_r[i]) -
+                                  0.2 *
+                                  ((dR[i+1]-dR[i]) *
+                                   (z_r[i+1]-z_r[i] -
+                                    1./12. *
+                                    (dZ[i+1]+dZ[i])) -
+                                   (dZ[i+1]-dZ[i]) *
+                                   (rho[i+1]-rho[i] -
+                                    1./12. *
+                                    (dR[i+1]+dR[i]))))
             prs[i] = prs[i+1] + delta_prs
         prs = DataArray(data=prs, dims=dims, coords=coords)
         prs = prs.transpose(*self._obj.rho.dims)
-        prs.attrs = dict(long_name='pressure', units='Pa')
+        prs.attrs = dict(long_name='Pressure at RHO-points', units='Pa')
         return prs*rho0
 
-    def pressure_bot(self):
+    def pressure_w(self):
         """
-        Caculate bottom pressure.
+        Caculate pressure at W-points.
+
+        prs = pressure_r()
         """
         g = 9.81
         drdz = 0.00478
+
+        rho = self._obj.rho + 1000.
+        prs = rho*g*self.dz
+        prs = prs.reindex(s_rho=prs.s_rho[::-1])
+        prs = prs.cumsum(dim='s_rho').reindex(s_rho=prs.s_rho[::-1])
+        prs = prs.pad(dict(s_rho=(0, 1)), mode='constant', constant_values=0.)
+        prs = prs.rename(s_rho='s_w').assign_coords(s_w=self._obj.s_w)
+        if 'zice' in self._obj:
+            rho0 = rho.isel(s_rho=-1).drop('s_rho')
+            prs = prs + (rho0-0.5*drdz*self._obj.zice)*g*self._obj.zice
+        prs.attrs = dict(long_name='Pressure at W-points', units='Pa')
+        return prs
+
+    def pressure_b(self):
+        """
+        Caculate bottom pressure.
+
+        prs = pressure_b()
+        """
+        g = 9.81
+        drdz = 0.00478
+
         rho = self._obj.rho + 1000.
         bprs = (rho*g*self.dz).sum(dim='s_rho')
         if 'zice' in self._obj:
@@ -1024,7 +1371,9 @@ class ROMSDatasetAccessor(ROMSAccessor):
 
     def potential_energy(self):
         """
-        Caculate potential_energy.
+        Caculate water column integrated potential energy.
+
+        pote = potential_energy()
         """
         g = 9.81
         drdz = 0.00478
@@ -1041,7 +1390,97 @@ class ROMSDatasetAccessor(ROMSAccessor):
         pote.attrs = dict(long_name='Potential energy', units='m3s-2')
         return pote
 
-    # Depth related property decorators
+    """
+    Pressure property decorators (for P-coordinate operations)
+    """
+    @property
+    def p_r(self):
+        if '_p_r_rho' not in self._obj.coords:
+            self._obj.coords['_p_r_rho'] = self.pressure_r()
+        return self._obj.coords['_p_r_rho']
+
+    @property
+    def p_w(self):
+        if '_p_w_rho' not in self._obj.coords:
+            self._obj.coords['_p_w_rho'] = self.pressure_w()
+        return self._obj.coords['_p_w_rho']
+
+    @property
+    def p_b(self):
+        if '_p_b_rho' not in self._obj.coords:
+            self._obj.coords['_p_b_rho'] = self.pressure_b()
+        return self._obj.coords['_p_b_rho']
+
+    p_r_rho = property(lambda self: self.p_r)
+    p_w_rho = property(lambda self: self.p_w)
+    p_b_rho = property(lambda self: self.p_b)
+
+    @property
+    def p_r_u(self):
+        if '_p_r_u' not in self._obj.coords:
+            self._obj.coords['_p_r_u'] = \
+                self.p_r.interp(eta_rho=self.eta_u, xi_rho=self.xi_u)
+        return self._obj.coords['_p_r_u']
+
+    @property
+    def p_w_u(self):
+        if '_p_w_u' not in self._obj.coords:
+            self._obj.coords['_p_w_u'] = \
+                self.p_w.interp(eta_rho=self.eta_u, xi_rho=self.xi_u)
+        return self._obj.coords['p_w_u']
+
+    @property
+    def p_b_u(self):
+        if '_p_b_u' not in self._obj.coords:
+            self._obj.coords['_p_b_u'] = \
+                self.p_b.interp(eta_rho=self.eta_u, xi_rho=self.xi_u)
+        return self._obj.coords['p_b_u']
+
+    @property
+    def p_r_v(self):
+        if '_p_r_v' not in self._obj.coords:
+            self._obj.coords['_p_r_v'] = \
+                self.p_r.interp(eta_rho=self.eta_v, xi_rho=self.xi_v)
+        return self._obj.coords['_p_r_v']
+
+    @property
+    def p_w_v(self):
+        if '_p_w_v' not in self._obj.coords:
+            self._obj.coords['_p_w_v'] = \
+                self.p_w.interp(eta_rho=self.eta_v, xi_rho=self.xi_v)
+        return self._obj.coords['p_w_v']
+
+    @property
+    def p_b_v(self):
+        if '_p_b_v' not in self._obj.coords:
+            self._obj.coords['_p_b_v'] = \
+                self.p_b.interp(eta_rho=self.eta_v, xi_rho=self.xi_v)
+        return self._obj.coords['p_b_v']
+
+    @property
+    def p_r_psi(self):
+        if '_p_r_psi' not in self._obj.coords:
+            self._obj.coords['_p_r_psi'] = \
+                self.p_r.interp(eta_rho=self.eta_psi, xi_rho=self.xi_psi)
+        return self._obj.coords['_p_r_psi']
+
+    @property
+    def p_w_psi(self):
+        if '_p_w_psi' not in self._obj.coords:
+            self._obj.coords['_p_w_psi'] = \
+                self.p_w.interp(eta_rho=self.eta_psi, xi_rho=self.xi_psi)
+        return self._obj.coords['p_w_psi']
+
+    @property
+    def p_b_psi(self):
+        if '_p_b_psi' not in self._obj.coords:
+            self._obj.coords['_p_b_psi'] = \
+                self.p_b.interp(eta_rho=self.eta_psi, xi_rho=self.xi_psi)
+        return self._obj.coords['p_b_psi']
+
+    """
+    Depth related property decorators
+    """
     @property
     def z_r_rho(self):
         if '_z_r_rho' not in self._obj.coords:
@@ -1196,7 +1635,9 @@ class ROMSDatasetAccessor(ROMSAccessor):
             self._obj['_vol'] = self.dz_rho/(self._obj.pm*self._obj.pn)
         return self._obj['_vol']
 
-    # Other commonly used alias
+    """
+    Other commonly used alias
+    """
     hpos = property(lambda self: self._hpos[0])
     vpos = property(lambda self: self._vpos[0])
 
@@ -1219,16 +1660,18 @@ class ROMSDatasetAccessor(ROMSAccessor):
     h = property(lambda self: self._obj['h' + self._hpos[0]])
     mask = property(lambda self: self._obj['mask' + self._hpos[0]])
 
-    # Linker of the plotting function
+    """
+    Linker of the plotting function
+    """
     plot = property(lambda self: _ROMSDatasetPlot(self._obj))
 
 
 class _ROMSDatasetPlot:
     """
-    This class wraps DataArray.plot
+    This class wraps Dataset.plot
     """
 
-    def __init__(self, obj):
+    def __init__(self, obj: Dataset):
         self._obj = obj
 
     def _plot_decorator(self, func):
@@ -1247,7 +1690,7 @@ class _ROMSDatasetPlot:
         @functools.wraps(func)
         def _plot_wrapper(*args, **kwargs):
 
-            z_coord_names = ['depth', 'z', 'vertical']
+            z_coord = ['depth', 'z', 'vertical']
 
             # args is passed in as tuple. Need to convert to list to
             # allow insertion/value change.
@@ -1308,7 +1751,7 @@ class _ROMSDatasetPlot:
                             largs.insert(0, 'distance')
                         else:
                             largs.insert(0, dims[0])
-                    elif args[0] not in dims and args[0] in z_coord_names:
+                    elif args[0] not in dims and args[0].lower() in z_coord:
                         if scor in dims:
                             largs[0] = zcor
                             dims.remove(scor)
@@ -1332,11 +1775,9 @@ class _ROMSDatasetPlot:
                     # If 4 input arguments, check if the first/second
                     # argument [x/y] is s_rho/s_w and replace it with
                     # z_r/z_w if use vertical coords.
-                    if args[1] not in coords and \
-                       args[1] in z_coord_names:
+                    if args[1] not in coords and args[1].lower() in z_coord:
                         largs[1] = zcor
-                    elif args[0] not in coords and \
-                            args[0] in z_coord_names:
+                    elif args[0] not in coords and args[0].lower() in z_coord:
                         largs[0] = zcor
 
             # set colormap to RdBu_r
@@ -1429,7 +1870,38 @@ class ROMSDataArrayAccessor(ROMSAccessor):
         da = da.assign_coords(Z=z)
         return da
 
-    def interpz(self, z, zdim):
+    def transformp(self, p):
+        """
+        Vertical coordinate transformer to P-coordinate (with XGCM).
+
+        da = roms.transform(p)
+        """
+        if type(p) in [int, float]:
+            p = np.array([float(p)])
+        else:
+            p = np.asarray(p)
+        p = DataArray(np.abs(p), dims='P')
+        ds = self.p.to_dataset(name='p')
+        grd = Grid(ds, coords={'S': {'center': self.s_nam}},
+                   periodic=False)
+        da = grd.transform(self._obj, 'S', p, target_data=self.p)
+        dims = [i if i != self.s_nam else 'P' for i in self._obj.dims]
+        da = da.transpose(*dims)
+        da = da.assign_coords(P=p)
+        return da
+
+    def interpz(self, z: DataArray, zdim: str):
+        """
+        Vertical coordinate transformer (with numba vectorization).
+
+        da = roms.interpz(z, zdim)
+
+        Inputs:
+            z    - DataArray of target depth
+            zdim - name of the z-dimension in the input DataArray
+        Outputs:
+            da   - output DataArray
+        """
         zraw = self.z
 
         dims = [i for i in z.dims if i != zdim]
@@ -1447,12 +1919,22 @@ class ROMSDataArrayAccessor(ROMSAccessor):
             dask='parallelized')
         return out.transpose(*z.dims)
 
-    # Depth-related decorator properties
+    """
+    Depth/Pressure-related decorator properties
+    """
     @property
     def z(self):
         var = '_z' + self._vpos + self._hpos
         if var not in self._obj.coords:
             self._obj.coords[var] = _calc_z(self._obj, self._vpos, self._hpos)
+        return self._obj[var]
+
+    @property
+    def p(self):
+        var = '_p' + self._vpos + self._hpos
+        assert var in self._obj.coords, \
+            "No pressure coordinate detected. " + \
+            "Need to calculate P-coords using '_ = ds.roms.p_vpos_hpos' first."
         return self._obj[var]
 
     @property
@@ -1462,7 +1944,9 @@ class ROMSDataArrayAccessor(ROMSAccessor):
         else:
             return None
 
-    # Other commonly used property decorators
+    """
+    Other commonly used property decorators
+    """
     hpos = property(lambda self: self._hpos)
     vpos = property(lambda self: self._vpos)
 
@@ -1485,7 +1969,9 @@ class ROMSDataArrayAccessor(ROMSAccessor):
     h = property(lambda self: self._obj['h' + self._hpos])
     mask = property(lambda self: self._obj['mask' + self._hpos])
 
-    # Linker of the plotting function
+    """
+    Linker of the plotting function
+    """
     plot = property(lambda self: _ROMSDataArrayPlot(self._obj,
                                                     self._vpos, self._hpos))
 
@@ -1495,10 +1981,8 @@ class _ROMSDataArrayPlot:
     This class wraps DataArray.plot
     """
 
-    def __init__(self, obj, vpos, hpos):
-        self._obj = obj
-        self._vpos = vpos
-        self._hpos = hpos
+    def __init__(self, obj: Dataset, vpos: str, hpos: str):
+        self._obj, self._vpos, self._hpos = obj, vpos, hpos
 
     def _plot_decorator(self, func):
         """
@@ -1516,7 +2000,7 @@ class _ROMSDataArrayPlot:
         @functools.wraps(func)
         def _plot_wrapper(*args, **kwargs):
 
-            z_coord_names = ['depth', 'z', 'vertical']
+            z_coord = ['depth', 'z', 'vertical']
 
             # Find default depth coordinate references
             dims = list(self._obj.dims)
@@ -1549,7 +2033,7 @@ class _ROMSDataArrayPlot:
                         else:
                             kwargs['x'], kwargs['y'] = dims[1], dims[0]
                 elif 'x' not in kwargs and 'y' in kwargs:
-                    if kwargs['y'] in z_coord_names:
+                    if kwargs['y'].lower() in z_coord:
                         kwargs['y'] = zcor
                         dims.remove(scor)
                         if dims[0] == 'track':
@@ -1562,7 +2046,7 @@ class _ROMSDataArrayPlot:
                         elif dims[1] == 'track':
                             kwargs['x'] = 'distance'
                 elif 'x' in kwargs and 'y' not in kwargs:
-                    if kwargs['x'] in z_coord_names:
+                    if kwargs['x'].lower() in z_coord:
                         kwargs['x'] = zcor
                         dims.remove(scor)
                         if dims[0] == 'track':
@@ -1575,17 +2059,17 @@ class _ROMSDataArrayPlot:
                         elif dims[0] == 'track':
                             kwargs['y'] = 'distance'
                 else:
-                    if kwargs['x'] in z_coord_names:
+                    if kwargs['x'].lower() in z_coord:
                         kwargs['x'] = zcor
-                    if kwargs['y'] in z_coord_names:
+                    if kwargs['y'].lower() in z_coord:
                         kwargs['y'] = zcor
 
             elif func.__name__ in ['line']:
-                if 'hue' in kwargs and kwargs['hue'] in z_coord_names:
+                if 'hue' in kwargs and kwargs['hue'].lower() in z_coord:
                     kwargs['hue'] = zcor
-                elif 'x' in kwargs and kwargs['x'] in z_coord_names:
+                elif 'x' in kwargs and kwargs['x'].lower() in z_coord:
                     kwargs['x'] = zcor
-                elif 'y' in kwargs and kwargs['y'] in z_coord_names:
+                elif 'y' in kwargs and kwargs['y'].lower() in z_coord:
                     kwargs['y'] = zcor
 
                 if 'hue' in kwargs and kwargs['hue'] == 'track':
@@ -1684,12 +2168,17 @@ def open_mfdataset(filename, grid_filename=None, interp_rho=False, **kwargs):
     """
     ds = xr.open_mfdataset(filename, **kwargs)
     if grid_filename is not None:
+        # the internal function get_ROMS_grid() requires a ROMS history
+        # file for certain vertical grid information (if not provided in
+        # the grid file itself). Attempt to fetch this file from the input
+        # argument.
         if isinstance(filename, list):
             grd = grid.get_ROMS_grid(grid_file=grid_filename,
                                      hist_file=filename[0])
         else:
+            filename0 = glob(filename)[0]
             grd = grid.get_ROMS_grid(grid_file=grid_filename,
-                                     hist_file=filename)
+                                     hist_file=filename0)
         if 'zeta' in ds:
             grd.vgrid.zeta = ds.zeta
         return RDataset(ds, grd, interp_rho=interp_rho)
@@ -1760,6 +2249,9 @@ class RDataset(xr.Dataset):
             dsg = self._grid.to_xarray()
             # Merge dsg into dsr. Since some variables in dsg is determined
             # as coordinates, cannot use the internal xr.merge method.
+            for var in dsg.coords:
+                if var not in self and var not in self.coords:
+                    self.coords[var] = dsg[var]
             for var in dsg.variables:
                 if var not in self and var not in self.coords:
                     self.coords[var] = dsg[var]
@@ -1772,7 +2264,7 @@ class RDataset(xr.Dataset):
             assert hasattr(self, 'h'), 'No grid information provided in ' + \
                                        'ROMS file. Need to provide grid file.'
 
-            if 'x_rho' in self:
+            if 'lon_rho' not in self:
                 self.coords['_spherical'] = False
                 # Add coords to exsisting CGrid.
                 x, y = hgrid.rho_to_vert(
@@ -1813,7 +2305,6 @@ class RDataset(xr.Dataset):
                 self.coords['lat_vert'] = (['eta_vert', 'xi_vert'], lat)
                 self.coords['x_vert'] = (['eta_vert', 'xi_vert'], x)
                 self.coords['y_vert'] = (['eta_vert', 'xi_vert'], y)
-
                 hgrd = hgrid.CGridGeo(lon, lat, proj)
 
             vgrd = vgrid.SCoord(
@@ -1825,22 +2316,27 @@ class RDataset(xr.Dataset):
                 vgrd.zeta = self.zeta
             if 'zice' in self:
                 vgrd.zice = self.zice
-
-            self._grid = grid.ROMSGrid(
-                'Generated by pyroms.xr', hgrd, vgrd)
+            self._grid = grid.ROMSGrid('Created by pyroms.xr', hgrd, vgrd)
 
         # ---------------------------------------------------------------
         # Remake basic coordinates for easy interpolation
-        self.coords['eta_rho'] = np.arange(self.dims['eta_rho']) + 0.5
-        self.coords['xi_rho'] = np.arange(self.dims['xi_rho']) + 0.5
-        self.coords['eta_vert'] = np.arange(self.dims['eta_rho']+1)
-        self.coords['xi_vert'] = np.arange(self.dims['xi_rho']+1)
-        self.coords['eta_psi'] = np.arange(self.dims['eta_psi']) + 1.0
-        self.coords['xi_psi'] = np.arange(self.dims['xi_psi']) + 1.0
-        self.coords['eta_u'] = self.eta_rho.data.copy()
-        self.coords['xi_u'] = self.xi_psi.data.copy()
-        self.coords['eta_v'] = self.eta_psi.data.copy()
-        self.coords['xi_v'] = self.xi_rho.data.copy()
+        # import pdb
+        # pdb.set_trace()
+        if 'eta_rho' in self.coords and 'xi_rho' in self.coords:
+            self.coords['eta_rho'] = np.arange(self.dims['eta_rho']) + 0.5
+            self.coords['xi_rho'] = np.arange(self.dims['xi_rho']) + 0.5
+        if 'eta_vert' in self.coords and 'xi_vert' in self.coords:
+            self.coords['eta_vert'] = np.arange(self.dims['eta_rho']+1)
+            self.coords['xi_vert'] = np.arange(self.dims['xi_rho']+1)
+        if 'eta_psi' in self.coords and 'xi_psi' in self.coords:
+            self.coords['eta_psi'] = np.arange(self.dims['eta_psi']) + 1.0
+            self.coords['xi_psi'] = np.arange(self.dims['xi_psi']) + 1.0
+        if 'eta_u' in self.coords and 'xi_u' in self.coords:
+            self.coords['eta_u'] = self.eta_rho.data.copy()
+            self.coords['xi_u'] = self.xi_psi.data.copy()
+        if 'eta_v' in self.coords and 'xi_v' in self.coords:
+            self.coords['eta_v'] = self.eta_psi.data.copy()
+            self.coords['xi_v'] = self.xi_rho.data.copy()
 
         # ---------------------------------------------------------------
         # Perform interpolation to RHO points or generate coords for u/v
