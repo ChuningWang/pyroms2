@@ -25,10 +25,10 @@ import matplotlib.pyplot as plt
 from matplotlib.path import Path
 from matplotlib.lines import Line2D
 from matplotlib.patches import Polygon
+from matplotlib.artist import Artist
 
 # map plotting tools
 import cartopy.crs as ccrs
-import cartopy.feature as cfeature
 import cartopy.io as cio
 
 
@@ -86,8 +86,7 @@ class CGrid:
                  dndx: _atype = None, dmde: _atype = None,
                  angle_rho: _atype = None, mask_rho: _atype = None):
 
-        assert x_vert.ndim == 2 and \
-               y_vert.ndim == 2 and \
+        assert x_vert.ndim == 2 and y_vert.ndim == 2 and \
                x_vert.shape == y_vert.shape, \
                'x and y must be 2D arrays of the same size.'
 
@@ -100,10 +99,8 @@ class CGrid:
         # Pass in x/y of vertices
         self._x_vert, self._y_vert = x_vert, y_vert
 
-        # Set initial Coriolis Parameter
-        self.f = None
-        self.spherical = False
-        self.proj = None
+        # Initiallize geographic Parameter (even not used in CGrid)
+        self.f, self.spherical, self.proj = None, None, None
 
         # Set land masks
         rho_shape = tuple([n-1 for n in self.x_vert.shape])
@@ -111,7 +108,7 @@ class CGrid:
             mask_rho = np.ones(rho_shape)
         else:
             assert mask_rho.shape == rho_shape, \
-                'Mask shape does not match with mesh size.'
+                'Mask size does not match mesh size.'
 
         # If maskedarray is given for verticies, modify the mask such that
         # non-existant grid points are masked. A cell requires all four
@@ -146,8 +143,8 @@ class CGrid:
         else:
             self.dx, self.dy = dx, dy
         self.pm, self.pn = 1./self.dx, 1./self.dy
-        self.xl = np.maximum(self.dx[0, :].sum(), self.dx[-1, :].sum())
-        self.el = np.maximum(self.dy[:, 0].sum(), self.dy[:, -1].sum())
+        self.xl = max(self.dx[0, :].sum(), self.dx[-1, :].sum())
+        self.el = max(self.dy[:, 0].sum(), self.dy[:, -1].sum())
 
         if dndx is None or dmde is None:
             self._calculate_derivative_metrics()
@@ -164,7 +161,7 @@ class CGrid:
 
     def _calculate_subgrids(self):
         """
-        Calculate rho/u/v/psi grid coordinates.
+        Calculate rho/u/v/psi grid coordinates
         """
         self.x_rho = 0.25*(self.x_vert[1:, 1:]+self.x_vert[1:, :-1] +
                            self.x_vert[:-1, 1:]+self.x_vert[:-1, :-1])
@@ -180,7 +177,7 @@ class CGrid:
 
     def _calculate_metrics(self):
         """
-        Calculate grid and domain lengths pm, pn, xl, el
+        Calculate grid length dx/dy
         """
         x_temp = 0.5*(self.x_vert[1:, :]+self.x_vert[:-1, :])
         y_temp = 0.5*(self.y_vert[1:, :]+self.y_vert[:-1, :])
@@ -310,9 +307,9 @@ class CGrid:
         ocean grid is surrounded by three land grid, it is difficult to
         advect energy in/out of the grid and thus should be masked.
 
-        This fixer, of cause if very crude and cannot remove all the issues.
-        The function edit_mask() or edit_mask_ij() should be used to manually
-        fix other issues.
+        This fixer, of cause if very crude and cannot remove all
+        questionable points. The function edit_mask() or edit_mask_ij()
+        should be used to manually fix other issues in the grid.
         """
 
         mask = self.mask_rho.copy()
@@ -723,35 +720,39 @@ class CGridGeo(CGrid):
         x0, y0 = self.x.mean(), self.y.mean()
         lon0, lat0 = self.proj(x0, y0, inverse=True)
 
-        # Center of stereographic projection restricted to be nearest one
-        # of 6 points on the sphere (every 90 deg lat/lon).
+        # Restrict the center of stereographic projection to the nearest
+        # one of 6 points on the sphere (every 90 deg lat/lon).
         lon0 = 90.*(np.around(lon0/90.))
         lat0 = 90.*(np.around(lat0/90.))
-        if np.abs(int(lat0)) == 90.:
+        if abs(int(lat0)) == 90:
             lon0 = 0.
-        if (lon0 == 0.) and (lat0 == 90.):
+
+        # Check if the projection center is at North Pole
+        if lat0 == 90.:
             NPole = True
         else:
             NPole = False
 
         # Construct Azimuthal projection
         proj_az = pyproj.Proj(proj='aeqd', lat_0=lat0, lon_0=lon0)
-        proj_trans = pyproj.Transformer.from_proj(
+        ptrans = pyproj.Transformer.from_proj(
             self.proj, proj_az, always_xy=True)
-        proj_trans_inv = pyproj.Transformer.from_proj(
+        ptrans_inv = pyproj.Transformer.from_proj(
             proj_az, self.proj, always_xy=True)
+        ptrans_ne = pyproj.Transformer.from_proj(
+            pyproj.Proj('epsg:4326'), proj_az, always_xy=True)
 
-        # Transform grid coordinates
-        x, y = proj_trans.transform(self.x, self.y)
+        # Transform X/Y from grid projection to Azimuthal projection
+        x, y = ptrans.transform(self.x, self.y)
 
         # Construct grid boundary shapely polygon
-        xb = np.concatenate((x[1:, 0], x[-1, 1:],
-                             x[-2::-1, -1], x[0, -2::-1]))
-        yb = np.concatenate((y[1:, 0], y[-1, 1:],
-                             y[-2::-1, -1], y[0, -2::-1]))
+        xb = np.concatenate(
+            (x[1:, 0], x[-1, 1:], x[-2::-1, -1], x[0, -2::-1]))
+        yb = np.concatenate(
+            (y[1:, 0], y[-1, 1:], y[-2::-1, -1], y[0, -2::-1]))
         bpoly = sgeometry.Polygon(list(zip(xb, yb)))
 
-        # Get land polygons from natural earth shape file
+        # Get land/iceshelf polygons from natural earth shape file
         if use_iceshelf:
             filename = cio.shapereader.natural_earth(
                 resolution='10m', name='antarctic_ice_shelves_polys')
@@ -759,21 +760,16 @@ class CGridGeo(CGrid):
             filename = cio.shapereader.natural_earth(
                 resolution='10m', name='land')
         shp = cio.shapereader.Reader(filename)
-        # Convert cartopy shape BasicReader to shapely polygons. 'geom' is
-        # an iterable object containing all the coast polygons.
-        geom = cfeature.ShapelyFeature(
-            shp.geometries(), self.proj).geometries()
 
-        # Construct projection transformer. epsg 4326 is Natural Earth
-        # projection code
-        proj_trans_ne = pyproj.Transformer.from_proj(
-            pyproj.Proj('epsg:4326'), proj_az, always_xy=True)
+        # Convert cartopy shape BasicReader to shapely polygons. 'geom'
+        # is an iterable object containing all the coast polygons.
+        geom = shp.geometries()
 
-        # Unwrap geom into a list of shapely polygons.
+        # Unwrap geom into a list of shapely polygons, and check if each
+        # polygon intersects the grid boundary.
         polys = []
         for gi in geom:
-            gitrans = sops.transform(proj_trans_ne.transform, gi)
-
+            gitrans = sops.transform(ptrans_ne.transform, gi)
             if isinstance(gitrans, sgeometry.MultiPolygon):
                 for gitransi in gitrans.geoms:
                     if gitransi.intersects(bpoly):
@@ -782,23 +778,23 @@ class CGridGeo(CGrid):
                 if gitrans.intersects(bpoly):
                     polys.append(gitrans)
 
-        # Iterate through polygons and check if it is in the model domain.
-        # Then convert shapely polygons to xy coordinates
+        # Get X/Y coords from the polys and transform to grid projection
         coastpolygons = []
         if NPole:
             # If projection center is at North pole, hack to avoid having
-            # Antartica polygon covering entire map. The idea is to define
-            # an 'ocean point', and check if this point is inside the given
-            # polygon. If so, it is a fake land polygon.
+            # Antarctica polygon covering entire map. The idea is to use
+            # a consistent 'ocean point', and check if this point is
+            # inside the given polygon. If so, then it is the Antarctica
+            # polygon and should be ruled out.
             ocean_point = sgeometry.Point(proj_az(0, -45))
             for pi in polys:
                 if not ocean_point.within(pi):
-                    pi_inv = sops.transform(proj_trans_inv.transform, pi)
+                    pi_inv = sops.transform(ptrans_inv.transform, pi)
                     x, y = pi_inv.exterior.coords.xy
                     coastpolygons.append([x, y])
         else:
             for pi in polys:
-                pi_inv = sops.transform(proj_trans_inv.transform, pi)
+                pi_inv = sops.transform(ptrans_inv.transform, pi)
                 x, y = pi_inv.exterior.coords.xy
                 coastpolygons.append([x, y])
         if use_iceshelf:
@@ -951,6 +947,7 @@ class BoundaryInteractor:
         if ax is None:
             ax = plt.gca()
         self._ax, self._canvas = ax, ax.figure.canvas
+        self._ax.set_title('Boundary Interactor')
 
         # Set default gridgen option, and copy over specified options.
         self._gridgen_options = {'ul_idx': 0, 'shp': (32, 32)}
@@ -959,8 +956,8 @@ class BoundaryInteractor:
 
         # Set the default line and polygon objects
         self._line = Line2D(x, y, ls='-', color='k', lw=1, animated=True)
-        self._poly = Polygon(self.verts, alpha=0.1, fc='k', animated=True)
         self._ax.add_line(self._line)
+        self._poly = Polygon(self.verts, alpha=0.1, fc='k', animated=True)
         self._ax.add_patch(self._poly)
 
         # Link in the lines that will show the beta values.
@@ -980,8 +977,10 @@ class BoundaryInteractor:
 
         # get the canvas and connect the callback events.
         # The active vert
+        self.cid = self._poly.add_callback(self._poly_changed)
         self._ind = None
-        self._canvas.mpl_connect('draw_event', self._on_draw)
+        self._canvas.mpl_connect('draw_event',
+                                 self._on_draw)
         self._canvas.mpl_connect('button_press_event',
                                  self._on_button_press)
         self._canvas.mpl_connect('button_release_event',
@@ -990,8 +989,6 @@ class BoundaryInteractor:
                                  self._on_motion_notify)
         self._canvas.mpl_connect('key_press_event',
                                  self._on_key_press)
-
-        ax.set_title('Boundary Interactor')
 
         # Print the command line instructions on screen
         print('Boundary Interactor Commands:')
@@ -1019,13 +1016,23 @@ class BoundaryInteractor:
         """
         Update boundary vertices when firstly drawn.
         """
-        self._bbox = self._canvas.copy_from_bbox(self._ax.bbox)
-        self._ax.draw_artist(self._line)
+        self._background = self._canvas.copy_from_bbox(self._ax.bbox)
         self._ax.draw_artist(self._poly)
+        self._ax.draw_artist(self._line)
         self._ax.draw_artist(self._pline)
         self._ax.draw_artist(self._mline)
         self._ax.draw_artist(self._zline)
         self._ax.draw_artist(self._sline)
+        return
+
+    def _poly_changed(self, poly):
+        """
+        This method is called whenever the pathpatch object is called.
+        """
+        # only copy the artist props to the line (except visibility)
+        vis = self._line.get_visible()
+        Artist.update_from(self._line, poly)
+        self._line.set_visible(vis)  # don't use the poly visibility state
         return
 
     def _on_button_press(self, event):
@@ -1047,7 +1054,9 @@ class BoundaryInteractor:
         """
         Release selected vertex.
         """
-        if event.button != 1 or not self._showverts:
+        if not self._showverts:
+            return
+        if event.button != 1:
             return
         self._ind = None
         return
@@ -1076,13 +1085,13 @@ class BoundaryInteractor:
         self._line.set_data(zip(*self._poly.xy[:-1]))
         self._update_beta_lines()
 
-        self._canvas.restore_region(self._bbox)
+        self._canvas.restore_region(self._background)
         self._ax.draw_artist(self._poly)
+        self._ax.draw_artist(self._line)
         self._ax.draw_artist(self._pline)
         self._ax.draw_artist(self._mline)
         self._ax.draw_artist(self._zline)
         self._ax.draw_artist(self._sline)
-        self._ax.draw_artist(self._line)
         self._canvas.blit(self._ax.bbox)
         return
 

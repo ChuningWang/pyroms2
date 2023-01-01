@@ -186,7 +186,8 @@ class ROMSAccessor:
             self._is_dataarray = False
 
     def set_locs(self, lon, lat, time=None,
-                 get_vert: bool = True, geo: bool = True):
+                 is_vert: bool = False, get_vert: bool = True,
+                 geo: bool = True):
         """
         Put lon/lat and x/y coords in a DataArray given lon, lat as
         tuple/list/ndarray.
@@ -197,6 +198,7 @@ class ROMSAccessor:
         Inputs:
             lon, lat        - 1-D list of longitude/latitude
             time (optional) - 1-D list of time
+            is_vert         - if the input coordinates are at vert points
             get_vert        - if calculate vert points
             geo             - if the input arguments lon/lat are
                               geographical or cartisian
@@ -207,13 +209,35 @@ class ROMSAccessor:
         lon, lat = np.asarray(lon).squeeze(), np.asarray(lat).squeeze()
         assert len(lon) == len(lat), 'lon/lat must have the same length.'
         assert lon.ndim == 1, 'lon/lat must be 1-D arrays.'
-        npts = len(lon)
         proj = pyproj.Proj(self._obj.attrs['proj4_init'])
         if geo:
             x, y = proj(lon, lat)
         else:
             x, y = lon, lat
             lon, lat = proj(x, y, inverse=True)
+        npts = len(lon)
+
+        if is_vert:
+            npts = npts - 1
+            # Input values are at vert points
+            x_vert, y_vert, lon_vert, lat_vert = x, y, lon, lat
+            x = 0.5*(x_vert[1:] + x_vert[:-1])
+            y = 0.5*(y_vert[1:] + y_vert[:-1])
+
+            # Projection transform
+            lon, lat = proj(x, y, inverse=True)
+        elif get_vert:
+            # Fetch vert points from rho points. These values are approximated.
+            x_vert, y_vert = np.zeros(npts+1), np.zeros(npts+1)
+            x_vert[1:-1] = 0.5*(x[1:] + x[:-1])
+            y_vert[1:-1] = 0.5*(y[1:] + y[:-1])
+            x_vert[0] = x_vert[1] - (x[1] - x[0])
+            x_vert[-1] = x_vert[-2] + (x[-1] - x[-2])
+            y_vert[0] = y_vert[1] - (y[1] - y[0])
+            y_vert[-1] = y_vert[-2] + (y[-1] - y[-2])
+
+            # Projection transform
+            lon_vert, lat_vert = proj(x_vert, y_vert, inverse=True)
 
         # Pass in geographic information to a Dataset
         ds_locs = Dataset()
@@ -242,35 +266,38 @@ class ROMSAccessor:
         dis = np.concatenate((np.array([0]), dis))
         ds_locs = ds_locs.assign_coords(distance=('track', dis))
 
-        if get_vert:
-            # Get vert points from rho points
-            xv, yv = np.zeros(npts+1), np.zeros(npts+1)
-            xv[1:-1], yv[1:-1] = 0.5*(x[1:] + x[:-1]), 0.5*(y[1:] + y[:-1])
-            xv[0], xv[-1] = xv[1] - (x[1] - x[0]), xv[-2] + (x[-1] - x[-2])
-            yv[0], yv[-1] = yv[1] - (y[1] - y[0]), yv[-2] + (y[-1] - y[-2])
-            lonv, latv = proj(xv, yv, inverse=True)
-            ds_locs['lon_vert'] = DataArray(lonv, dims=('track_vert'))
-            ds_locs['lat_vert'] = DataArray(latv, dims=('track_vert'))
-            ds_locs['x_vert'] = DataArray(xv, dims=('track_vert'))
-            ds_locs['y_vert'] = DataArray(yv, dims=('track_vert'))
+        # Calculate angles, grid metrics if vert points provided
+        if is_vert or get_vert:
+            # Angles from x-positive
+            angle_xy = np.arctan2(y_vert[1:]-y_vert[:-1],
+                                  x_vert[1:]-x_vert[:-1])
 
-            # Also calculate distance from the first point
-            disv = np.hypot(xv[1:] - xv[:-1], yv[1:] - yv[:-1]).cumsum()
-            disv = np.concatenate((np.array([0]), disv))
-            ds_locs = ds_locs.assign_coords(track_vert=np.arange(npts+1))
-            ds_locs = ds_locs.assign_coords(distance_vert=('track_vert', disv))
-
-            # Calculate angles if vert points provided
-            angle_xy = np.arctan2(
-                np.diff(0.5*(yv[1:, :]+yv[:-1, :])),
-                np.diff(0.5*(xv[1:, :]+xv[:-1, :])))
+            # Angles from true east
             geod = pyproj.Geod(ellps=proj.crs.ellipsoid.name.replace(' ', ''))
-            angle, _, _ = geod.inv(
-                ds_locs.lonv[:-1], ds_locs.latv[:-1],
-                ds_locs.lonv[1:], ds_locs.latv[1:])
+            angle, _, _ = geod.inv(lon_vert[:-1], lat_vert[:-1],
+                                   lon_vert[1:], lat_vert[1:])
             angle = (90.-angle)*np.pi/180.
+
+            # Grid metrics
+            _, _, dx = geod.inv(lon_vert[:-1], lat_vert[:-1],
+                                lon_vert[1:], lat_vert[1:])
+            dis_vert = np.hypot(x_vert[1:] - x_vert[:-1],
+                                y_vert[1:] - y_vert[:-1]).cumsum()
+            dis_vert = np.concatenate((np.array([0]), dis_vert))
+            ds_locs = ds_locs.assign_coords(track_vert=np.arange(npts+1))
+            ds_locs = ds_locs.assign_coords(distance_vert=('track_vert',
+                                                           dis_vert))
+
+            # Pass in these info to Dataset
+            ds_locs['lon_vert'] = DataArray(lon_vert, dims=('track_vert'))
+            ds_locs['lat_vert'] = DataArray(lat_vert, dims=('track_vert'))
+            ds_locs['x_vert'] = DataArray(x_vert, dims=('track_vert'))
+            ds_locs['y_vert'] = DataArray(y_vert, dims=('track_vert'))
+
             ds_locs['angle_xyr'] = DataArray(angle_xy, dims=('track'))
             ds_locs['angler'] = DataArray(angle, dims=('track'))
+
+            ds_locs['dx'] = DataArray(dx, dims=('track'))
 
         return ds_locs
 
@@ -307,8 +334,8 @@ class ROMSAccessor:
         else:
             x, y = lon, lat
             lon, lat = proj(x, y, inverse=True)
-
         nypts, nxpts = lon.shape
+
         if is_vert:
             nypts, nxpts = nypts - 1, nxpts - 1
             # Input values are at vert points
@@ -684,7 +711,8 @@ class ROMSAccessor:
                 dout['vbar_rot'] = dout.vbar*np.cos(ar) + dout.ubar*np.sin(ar)
         return dout
 
-    def interp(self, lon, lat, time=None):
+    def interp(self, lon, lat, time=None,
+               is_vert: bool = False, geo: bool = True):
         """
         Horizontal interpolation method for ROMS Dataset.
 
@@ -693,19 +721,25 @@ class ROMSAccessor:
         Inputs:
             lon, lat        - 1-D list of longitude/latitude
             time (optional) - 1-D list of time
+            is_vert         - if the input coordinates are at vert points
+            geo             - if the input arguments lon/lat are
+                              geographical or cartisian
 
         Output:
             dout            - interpolated Dataset.
         """
-        ds_locs = self.set_locs(lon, lat, time, get_vert=True)
+        ds_locs = self.set_locs(lon, lat, time,
+                                is_vert=is_vert, get_vert=True, geo=geo)
         dout = self._interp(ds_locs)
 
         # Add extra coordinates
-        for var in ['track', 'distance', 'track_vert', 'distance_vert']:
-            dout.coords[var] = ds_locs[var]
+        if self._is_dataset:
+            for var in ['track', 'distance', 'track_vert', 'distance_vert']:
+                dout.coords[var] = ds_locs[var]
         return dout
 
-    def interp2d(self, lon, lat, time=None, is_vert=False, geo=True):
+    def interp2d(self, lon, lat, time=None,
+                 is_vert: bool = False, geo: bool = True):
         """
         Horizontal interpolation method for ROMS Dataset.
 
@@ -851,6 +885,40 @@ class ROMSDatasetAccessor(ROMSAccessor):
             self._vpos.append('_w')
         if len(self._vpos) == 0:
             self._vpos = ['']
+
+    def subset(self, eta0=0, eta1=None, deta=None, xi0=0, xi1=None, dxi=None):
+        hpos = self._hpos[0]
+        if eta1 is None:
+            if hpos in ['_rho', '_u']:
+                eta1 = self._obj.dims['eta' + hpos]
+            elif hpos in ['_v', '_psi']:
+                eta1 = self._obj.dims['eta' + hpos] + 1
+            elif hpos in ['_vert']:
+                eta1 = self._obj.dims['eta' + hpos] - 1
+        if xi1 is None:
+            if hpos in ['_rho', '_v']:
+                xi1 = self._obj.dims['xi' + hpos]
+            elif hpos in ['_u', '_psi']:
+                xi1 = self._obj.dims['xi' + hpos] + 1
+            elif hpos in ['_vert']:
+                xi1 = self._obj.dims['xi' + hpos] - 1
+        coords = dict(
+            eta_rho=slice(eta0, eta1, deta),
+            eta_u=slice(eta0, eta1, deta),
+            eta_v=slice(eta0, eta1-1, deta),
+            eta_vert=slice(eta0, eta1+1, deta),
+            eta_psi=slice(eta0, eta1-1, deta),
+            xi_rho=slice(xi0, xi1, dxi),
+            xi_u=slice(xi0, xi1-1, dxi),
+            xi_v=slice(xi0, xi1, dxi),
+            xi_vert=slice(xi0, xi1+1, dxi),
+            xi_psi=slice(xi0, xi1-1, dxi))
+        slice_coords = {}
+        for hpos in self._hpos:
+            slice_coords['eta' + hpos] = coords['eta' + hpos]
+            slice_coords['xi' + hpos] = coords['xi' + hpos]
+        dout = self._obj.isel(slice_coords)
+        return dout
 
     def transform(self, z):
         """
@@ -1053,7 +1121,7 @@ class ROMSDatasetAccessor(ROMSAccessor):
         """
         Calculate vertical gradients along Z-coordinate.
 
-        ddx, ddy = hgrads(var, direction='both', conserve=True)
+        ddx, ddy = hgradz(var, direction='both', conserve=True)
 
         Inputs:
             var       - name of variables to calculate gradient
@@ -1111,7 +1179,7 @@ class ROMSDatasetAccessor(ROMSAccessor):
         """
         Calculate vertical gradients along P-coordinate.
 
-        ddx, ddy = hgrads(var, direction='both', conserve=True)
+        ddx, ddy = hgradp(var, direction='both', conserve=True)
 
         Inputs:
             var       - name of variables to calculate gradient
@@ -1367,7 +1435,7 @@ class ROMSDatasetAccessor(ROMSAccessor):
                    (rho.isel(s_rho=-1)-0.5*drdz*self._obj.zice) * g * \
                    self._obj.zice
         bprs.attrs = dict(long_name='Bottom pressure', units='Pa')
-        return bprs
+        return bprs.drop(['s_rho', 'Cs_r'])
 
     def potential_energy(self):
         """
@@ -1850,45 +1918,128 @@ class ROMSDataArrayAccessor(ROMSAccessor):
         self._hpos = _find_hpos(obj)
         self._vpos = _find_vpos(obj)
 
-    def transform(self, z):
+    def transform(self, lev, target_dim: str = 'Z', **kwargs):
         """
         Vertical coordinate transformer (with XGCM).
 
-        da = roms.transform(z)
+        da = roms.transformz(lev, target_dim='Z', **kwargs)
+        """
+        tdu, tdl = target_dim.upper(), target_dim.lower()
+        assert tdu in ['Z', 'P'], "target_dim must be one of ['Z', 'P']"
+        if type(lev) in [int, float]:
+            is_onelayer = True
+            lev = np.array([float(lev)])
+        else:
+            is_onelayer = False
+            lev = np.asarray(lev)
+        if tdu == 'Z':
+            lev = DataArray(-np.abs(lev), dims=tdu)
+            target_data = self.z
+        elif tdu == 'P':
+            lev = DataArray(np.abs(lev), dims=tdu)
+            target_data = self.p
+        ds = target_data.to_dataset(name=tdl)
+        grd = Grid(ds, coords={'S': {'center': self.s_nam}},
+                   periodic=False)
+        da = grd.transform(self._obj, 'S', lev,
+                           target_data=target_data,
+                           **kwargs)
+        dims = [i if i != self.s_nam else tdu for i in self._obj.dims]
+        da = da.transpose(*dims)
+        da = da.assign_coords({tdu: lev})
+        if is_onelayer:
+            da = da.isel({tdu: 0})
+        return da
+
+    def transformz(self, z, **kwargs):
+        """
+        Vertical coordinate transformer (with XGCM).
+
+        da = roms.transformz(z)
         """
         if type(z) in [int, float]:
+            is_onelayer = True
             z = np.array([float(z)])
         else:
+            is_onelayer = False
             z = np.asarray(z)
         z = DataArray(-np.abs(z), dims='Z')
         ds = self.z.to_dataset(name='z')
         grd = Grid(ds, coords={'S': {'center': self.s_nam}},
                    periodic=False)
-        da = grd.transform(self._obj, 'S', z, target_data=self.z)
+        da = grd.transform(self._obj, 'S', z, target_data=self.z, **kwargs)
         dims = [i if i != self.s_nam else 'Z' for i in self._obj.dims]
         da = da.transpose(*dims)
         da = da.assign_coords(Z=z)
+        if is_onelayer:
+            da = da.isel(Z=0)
         return da
 
-    def transformp(self, p):
+    def transformp(self, p, **kwargs):
         """
         Vertical coordinate transformer to P-coordinate (with XGCM).
 
         da = roms.transform(p)
         """
         if type(p) in [int, float]:
+            is_onelayer = True
             p = np.array([float(p)])
         else:
+            is_onelayer = False
             p = np.asarray(p)
         p = DataArray(np.abs(p), dims='P')
         ds = self.p.to_dataset(name='p')
         grd = Grid(ds, coords={'S': {'center': self.s_nam}},
                    periodic=False)
-        da = grd.transform(self._obj, 'S', p, target_data=self.p)
+        da = grd.transform(self._obj, 'S', p, target_data=self.p, **kwargs)
         dims = [i if i != self.s_nam else 'P' for i in self._obj.dims]
         da = da.transpose(*dims)
         da = da.assign_coords(P=p)
+        if is_onelayer:
+            da = da.isel(P=0)
         return da
+
+    def interpv(self, lev: DataArray,
+                in_dim: str = 'find_dim', target_dim: str = 'Z'):
+        """
+        Vertical coordinate transformer (with numba vectorization).
+
+        da = roms.interpv(lev, in_dim, target_dim='Z')
+
+        Inputs:
+            lev        - DataArray of target depth
+            in_dim     - name of the target dimension in lev
+            target_dim - name of the target coordinate, in ['Z', 'P']
+        Outputs:
+            da         - output DataArray
+        """
+        target_dim = target_dim.upper()
+        assert target_dim in ['Z', 'P'], \
+            "target_dim must be one of ['Z', 'P']"
+        if target_dim == 'Z':
+            lev = -np.abs(lev)
+            target_data = self.z
+        elif target_dim == 'P':
+            lev = np.abs(lev)
+            target_data = self.p
+
+        dims0 = [i for i in target_data.dims if i != self.s_nam]
+        if in_dim == 'find_dim':
+            in_dim_set = set(lev.dims) - set(dims0)
+            in_dim = in_dim_set.pop()
+        dims = [i for i in lev.dims if i != in_dim]
+        assert dims == dims0, \
+            'lev must have the same dimensions as the raw DataArray, ' + \
+            'excluding the target dimension.'
+
+        out = xr.apply_ufunc(
+            _interp1d,
+            self._obj, target_data, lev,
+            input_core_dims=[[self.s_nam], [self.s_nam], [in_dim]],
+            output_core_dims=[[in_dim]],
+            exclude_dims=set((self.s_nam,)),
+            dask='parallelized')
+        return out.transpose(*lev.dims)
 
     def interpz(self, z: DataArray, zdim: str):
         """
