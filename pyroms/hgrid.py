@@ -4,7 +4,6 @@ Tools for creating and working with ROMS Arakawa C-Grids.
 
 # python Typing functionalities
 from typing import List, Tuple, Union
-from matplotlib.axes._subplots import Axes
 
 # Python/C interface
 import os
@@ -912,7 +911,7 @@ class BoundaryInteractor:
                  y: List = [60, -60, -60, 60],
                  beta: Union[type(None), List] = None,
                  proj: Union[type(None), pyproj.Proj] = None,
-                 ax: Union[type(None), Axes] = None,
+                 ax=None,
                  **kwargs):
 
         if isinstance(x, str):

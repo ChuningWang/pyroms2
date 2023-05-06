@@ -44,6 +44,9 @@ class SCoord:
         Vtrans = 2, Vstretch = 2:
             A. Shchepetkin (2005) UCLA-ROMS vertical coordinate
             transformation and stretching functions.
+        Vtrans = 2, Vstretch = 3:
+            R. Geyer bottom boundary layer intensification vertical coordinate
+            transformation and stretching functions.
         Vtrans = 2, Vstretch = 4 (default):
             A. Shchepetkin (2010) UCLA-ROMS vertical coordinate
             transformation and stretching functions.
@@ -82,6 +85,12 @@ class SCoord:
         elif self.Vtrans == 2 and self.Vstretch == 2:
             if verbose:
                 print('A. Shchepetkin (2005) UCLA-ROMS vertical coordinate ' +
+                      'transformation (Vtransform=2) and ' +
+                      'stretching (Vstretching=2) functions.')
+        elif self.Vtrans == 2 and self.Vstretch == 3:
+            if verbose:
+                print('R. Geyer bottom boundary layer intensification ' +
+                      'vertical coordinate ' +
                       'transformation (Vtransform=2) and ' +
                       'stretching (Vstretching=2) functions.')
         elif self.Vtrans == 2 and self.Vstretch == 4:
@@ -186,6 +195,14 @@ class SCoord:
                     self.Cs_r = Csur
             else:
                 self.Cs_r = self.s_r
+        elif self.Vtrans == 2 and self.Vstretch == 3:
+            gam = 3.
+            mu = self.p5*(1-np.tanh(gam*(self.s_r+0.5)))
+            Csur = -(np.log10(np.cosh(gam*np.abs(self.s_r)**self.theta_s)) /
+                     np.log10(np.cosh(gam)))
+            Cbot = (np.log10(np.cosh(gam*(self.s_r+1)**self.theta_b)) /
+                    np.log10(np.cosh(gam))) - 1
+            self.Cs_r = mu*Cbot + (1-mu)*Csur
         elif self.Vtrans == 2 and self.Vstretch == 4:
             if (self.theta_s > 0):
                 Csur = (self.c1 - np.cosh(self.theta_s * self.s_r)) / \
@@ -234,6 +251,14 @@ class SCoord:
                     self.Cs_w = Csur
             else:
                 self.Cs_w = self.s_w
+        elif self.Vtrans == 2 and self.Vstretch == 3:
+            gam = 3.
+            mu = self.p5*(1-np.tanh(gam*(self.s_w+0.5)))
+            Csur = -(np.log10(np.cosh(gam*np.abs(self.s_w)**self.theta_s)) /
+                     np.log10(np.cosh(gam)))
+            Cbot = (np.log10(np.cosh(gam*(self.s_w+1)**self.theta_b)) /
+                    np.log10(np.cosh(gam))) - 1
+            self.Cs_w = mu*Cbot + (1-mu)*Csur
         elif self.Vtrans == 2 and self.Vstretch == 4:
             if (self.theta_s > 0):
                 Csur = (self.c1 - np.cosh(self.theta_s * self.s_w)) / \

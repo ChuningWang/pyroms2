@@ -1163,8 +1163,8 @@ class ROMSDatasetAccessor(ROMSAccessor):
 
         ddx, ddy = ddxs - dzdxs*dvdz_x, ddys - dzdys*dvdz_y
 
-        ddx = ddx.drop(('eta_rho', 'xi_rho'))
-        ddy = ddy.drop(('eta_rho', 'xi_rho'))
+        ddx = ddx.drop(('eta' + hpos, 'xi' + hpos))
+        ddy = ddy.drop(('eta' + hpos, 'xi' + hpos))
 
         if direction == 'both':
             return ddx, ddy
@@ -2057,6 +2057,7 @@ class ROMSDataArrayAccessor(ROMSAccessor):
 
         dims = [i for i in z.dims if i != zdim]
         dimsraw = [i for i in zraw.dims if i != self.s_nam]
+        dimsnew = [i if i != self.s_nam else zdim for i in self._obj.dims]
         assert dims == dimsraw, \
             'z must have the same dimensions as the raw DataArray, ' + \
             'excluding the z-dimension.'
@@ -2068,7 +2069,7 @@ class ROMSDataArrayAccessor(ROMSAccessor):
             output_core_dims=[[zdim]],
             exclude_dims=set((self.s_nam,)),
             dask='parallelized')
-        return out.transpose(*z.dims)
+        return out.transpose(*dimsnew)
 
     """
     Depth/Pressure-related decorator properties

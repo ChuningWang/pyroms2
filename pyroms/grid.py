@@ -428,6 +428,8 @@ def get_ROMS_hgrid(gridid):
 
     # Check for cartesian or geographical grid
     spherical = fh.variables['spherical'][0].item()
+    if isinstance(spherical, bytes):
+        spherical = spherical.decode()
     if spherical == 0 or spherical == 'F':
         spherical = False
     else:
