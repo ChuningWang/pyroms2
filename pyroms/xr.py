@@ -35,15 +35,17 @@ def _find_hpos(obj: Union[DataArray, Dataset]) -> str:
     pos = _find_hpos(obj)
     """
 
-    if 'eta_rho' in obj.dims or 'xi_rho' in obj.dims:
+    if 'eta_rho' in obj.dims or 'xi_rho' in obj.dims or 'h_rho' in obj.coords:
         pos = '_rho'
-    elif 'eta_u' in obj.dims or 'xi_u' in obj.dims:
+    elif 'eta_u' in obj.dims or 'xi_u' in obj.dims or 'h_u' in obj.coords:
         pos = '_u'
-    elif 'eta_v' in obj.dims or 'xi_v' in obj.dims:
+    elif 'eta_v' in obj.dims or 'xi_v' in obj.dims or 'h_v' in obj.coords:
         pos = '_v'
-    elif 'eta_psi' in obj.dims or 'xi_psi' in obj.dims:
+    elif 'eta_psi' in obj.dims or 'xi_psi' in obj.dims or \
+         'h_psi' in obj.coords:
         pos = '_psi'
-    elif 'eta_vert' in obj.dims or 'xi_vert' in obj.dims:
+    elif 'eta_vert' in obj.dims or 'xi_vert' in obj.dims or \
+         'h_vert' in obj.coords:
         pos = '_vert'
     else:
         pos = ''
@@ -2295,6 +2297,8 @@ def open_dataset(filename, grid_filename=None, interp_rho=False, **kwargs):
         **kwargs      - other keyword arguments to be passed to RDataset
     """
     ds = xr.open_dataset(filename, **kwargs)
+    if 'time' in ds.dims:
+        ds = ds.rename_dims(time='ocean_time').rename_vars(time='ocean_time')
     if grid_filename is not None:
         grd = grid.get_ROMS_grid(grid_file=grid_filename,
                                  hist_file=filename)
@@ -2319,6 +2323,8 @@ def open_mfdataset(filename, grid_filename=None, interp_rho=False, **kwargs):
         **kwargs      - other keyword arguments to be passed to RDataset
     """
     ds = xr.open_mfdataset(filename, **kwargs)
+    if 'time' in ds.dims:
+        ds = ds.rename_dims(time='ocean_time').rename_vars(time='ocean_time')
     if grid_filename is not None:
         # the internal function get_ROMS_grid() requires a ROMS history
         # file for certain vertical grid information (if not provided in

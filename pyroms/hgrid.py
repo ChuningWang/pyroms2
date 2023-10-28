@@ -83,7 +83,8 @@ class CGrid:
                  x_v: _atype = None, y_v: _atype = None,
                  dx: _atype = None, dy: _atype = None,
                  dndx: _atype = None, dmde: _atype = None,
-                 angle_rho: _atype = None, mask_rho: _atype = None):
+                 angle_rho: _atype = None, mask_rho: _atype = None,
+                 f0: float = 0., beta: float = 0.):
 
         assert x_vert.ndim == 2 and y_vert.ndim == 2 and \
                x_vert.shape == y_vert.shape, \
@@ -99,7 +100,7 @@ class CGrid:
         self._x_vert, self._y_vert = x_vert, y_vert
 
         # Initiallize geographic Parameter (even not used in CGrid)
-        self.f, self.spherical, self.proj = None, None, None
+        self.spherical, self.proj = False, None
 
         # Set land masks
         rho_shape = tuple([n-1 for n in self.x_vert.shape])
@@ -156,6 +157,9 @@ class CGrid:
         else:
             self.angle_rho = angle_rho
         self._calculate_angle_vert()
+        self.angle_xy = self.angle_rho
+
+        self.f = f0 + self.y_rho*beta
         return
 
     def _calculate_subgrids(self):
@@ -510,6 +514,8 @@ class CGridGeo(CGrid):
                  dndx: _atype = None, dmde: _atype = None,
                  angle_rho: _atype = None, mask_rho: _atype = None):
 
+        # Initiallize geographic Parameter
+        self.spherical = True
         self.use_gcdist = use_gcdist
         self.ellipse = ellipse
         if isinstance(proj, pyproj.Proj):
@@ -591,7 +597,6 @@ class CGridGeo(CGrid):
         self._calculate_angle_xy()
 
         self.f = 2.0 * 7.29e-5 * np.sin(self.lat_rho * np.pi / 180.0)
-        self.spherical = True
         return
 
     def _calculate_metrics(self):

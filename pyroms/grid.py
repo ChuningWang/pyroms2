@@ -358,23 +358,23 @@ class ROMSGridInfo:
                 if info[4] == 'roms':
                     self.name = info[1]
                     self.grdfile = info[2]
-                    self.N = np.int(info[3])
+                    self.N = int(info[3])
                     self.grdtype = info[4]
-                    self.Vtrans = np.int(info[5])
-                    self.Vstretch = np.int(info[6])
-                    self.theta_s = np.float(info[7])
-                    self.theta_b = np.float(info[8])
-                    self.Tcline = np.float(info[9])
+                    self.Vtrans = int(info[5])
+                    self.Vstretch = int(info[6])
+                    self.theta_s = float(info[7])
+                    self.theta_b = float(info[8])
+                    self.Tcline = float(info[9])
                 elif info[4] == 'z':
                     nline = len(info)
                     dep = info[5]
                     for line in range(6, nline):
                         dep = dep + info[line]
-                    dep = np.array(dep, dtype=np.float)
+                    dep = np.array(dep, dtype=float)
 
                     self.name = info[1]
                     self.grdfile = info[2]
-                    self.N = np.int(info[3])
+                    self.N = int(info[3])
                     self.grdtype = info[4]
                     self.depth = dep
                 else:
@@ -397,17 +397,23 @@ class ROMSGridInfo:
             self.grdtype = 'roms'
 
             try:
-                self.Vtrans = np.float(hist.variables['Vtransform'][:])
-                self.Vstretch = np.float(hist.variables['Vstretching'][:])
+                self.Vtrans = float(hist.variables['Vtransform'][:])
+                self.Vstretch = float(hist.variables['Vstretching'][:])
             except KeyError:
                 print('variable Vtransform/Vstretching not found in ' +
                       'history file. Defaulting to Vtrans=2 and ' +
                       'Vstretch=4')
                 self.Vtrans = 2
                 self.Vstretch = 4
-            self.theta_s = np.float(hist.variables['theta_s'][:])
-            self.theta_b = np.float(hist.variables['theta_b'][:])
-            self.Tcline = np.float(hist.variables['Tcline'][:])
+            try:
+                self.theta_s = float(hist.variables['theta_s'][:])
+                self.theta_b = float(hist.variables['theta_b'][:])
+                self.Tcline = float(hist.variables['Tcline'][:])
+            except KeyError:
+                grid = nc.Dataset(grid_file, 'r')
+                self.theta_s = float(grid.variables['theta_s'][:])
+                self.theta_b = float(grid.variables['theta_b'][:])
+                self.Tcline = float(grid.variables['Tcline'][:])
 
 
 def get_ROMS_hgrid(gridid):
@@ -517,6 +523,11 @@ def get_ROMS_hgrid(gridid):
                      x_psi=x_psi, y_psi=y_psi, dx=dx, dy=dy,
                      dndx=dndx, dmde=dmde, angle_rho=angle)
 
+        if 'f' in list(fh.variables.keys()):
+            hgrd.f = fh.variables['f'][:]
+        else:
+            hgrd.f = np.zeros(hgrd.x_rho.shape)
+
     else:
         # geographical grid
         print('Load geographical grid from file')
@@ -610,13 +621,13 @@ def get_ROMS_hgrid(gridid):
 
     # load the mask
     try:
-        hgrd.mask_rho = fh.variables['mask_rho'][:].astype(np.int32)
+        hgrd.mask_rho = fh.variables['mask_rho'][:].astype(int)
     except KeyError:
-        hgrd.mask_rho = np.ones(hgrd.x_rho.shape, dtype=np.int32)
+        hgrd.mask_rho = np.ones(hgrd.x_rho.shape, dtype=int)
     if 'mask_is' in fh.variables.keys():
-        hgrd.mask_is = fh.variables['mask_is'][:].astype(np.int32)
+        hgrd.mask_is = fh.variables['mask_is'][:].astype(int)
     elif 'mask_iceshelf' in fh.variables.keys():
-        hgrd.mask_is = fh.variables['mask_iceshelf'][:].astype(np.int32)
+        hgrd.mask_is = fh.variables['mask_iceshelf'][:].astype(int)
 
     fh.close()
 
@@ -893,12 +904,12 @@ def write_ROMS_grid(grd, filename='roms_grd.nc'):
         io.nc_write_var(fh, grd.hgrid.lat_v, 'lat_v', ('eta_v', 'xi_v'),
                         'latitude of V-points', 'degree_north')
 
-    fh.createVariable('spherical', 'i')
+    fh.createVariable('spherical', 'c')
     fh.variables['spherical'].long_name = 'Grid type logical switch'
     if grd.hgrid.spherical:
-        fh.variables['spherical'][:] = 1
+        fh.variables['spherical'][:] = 'T'
     else:
-        fh.variables['spherical'][:] = 0
+        fh.variables['spherical'][:] = 'F'
     print(' ... wrote ', 'spherical')
 
     io.nc_write_var(fh, grd.hgrid.angle_rho, 'angle', ('eta_rho', 'xi_rho'),
