@@ -666,7 +666,7 @@ class CGridGeo(CGrid):
         self.__init__(lon_vert, lat_vert, self.proj)
         return
 
-    def mask_land(self, use_iceshelf=False):
+    def mask_land(self, use_iceshelf=False, scale='10m'):
         """
         Mask land/iceshelf points using cartopy coastpolygons.
         This function iterate through the coastpolygons object and call
@@ -675,7 +675,7 @@ class CGridGeo(CGrid):
         print('Constructing land mask...')
         if not hasattr(self, 'coastpolygons'):
             # Need to fetch coast polygons
-            self.get_coastpolygons()
+            self.get_coastpolygons(scale=scale)
         npoly = len(self.coastpolygons)
         print('Total # of coast polygons: %4d' % npoly)
         for i, pol in enumerate(self.coastpolygons):
@@ -687,17 +687,17 @@ class CGridGeo(CGrid):
             self.mask_polygon(np.array(pol, np.float32).T)
 
         if use_iceshelf:
-            self.mask_iceshelf()
+            self.mask_iceshelf(scale=scale)
         return
 
-    def mask_iceshelf(self):
+    def mask_iceshelf(self, scale='10m'):
         print('Constructing iceshelf mask...')
         if not hasattr(self, 'mask_is'):
             self.mask_is = \
                 np.zeros(self.mask_rho.shape, dtype=np.int32)
         if not hasattr(self, 'coastpolygons_iceshelf'):
             # Need to fetch iceshelf boundary polygons
-            self.get_coastpolygons(use_iceshelf=True)
+            self.get_coastpolygons(use_iceshelf=True, scale=scale)
 
         npoly = len(self.coastpolygons_iceshelf)
         print('Total # of iceshelf polygons: %4d' % npoly)
@@ -711,7 +711,7 @@ class CGridGeo(CGrid):
                               use_iceshelf=True, mask_value=1)
         return
 
-    def get_coastpolygons(self, use_iceshelf=False):
+    def get_coastpolygons(self, use_iceshelf=False, scale='10m'):
         """
         Get coastpolygons from natural earth land product.
         """
@@ -753,11 +753,15 @@ class CGridGeo(CGrid):
 
         # Get land/iceshelf polygons from natural earth shape file
         if use_iceshelf:
+            if scale == '110m':
+                scale_iceshelf = '50m'
+            else:
+                scale_iceshelf = scale
             filename = cio.shapereader.natural_earth(
-                resolution='10m', name='antarctic_ice_shelves_polys')
+                resolution=scale_iceshelf, name='antarctic_ice_shelves_polys')
         else:
             filename = cio.shapereader.natural_earth(
-                resolution='10m', name='land')
+                resolution=scale, name='land')
         shp = cio.shapereader.Reader(filename)
 
         # Convert cartopy shape BasicReader to shapely polygons. 'geom'

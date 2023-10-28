@@ -191,14 +191,14 @@ def nc_create_roms_file(filename, grd, tref=None,
         fh.variables['pm'].units = 'meter-1'
         fh.variables['pm'].coordinates = 'lon_rho lat_rho'
         fh.variables['pm'].field = 'pm, scalar'
-        fh.variables['pm'][:] = 1. / grd.hgrid.dx
+        fh.variables['pm'][:] = grd.hgrid.pm
 
         fh.createVariable('pn', 'f8', ('eta_rho', 'xi_rho'))
         fh.variables['pn'].long_name = 'curvilinear coordinate metric in ETA'
         fh.variables['pn'].units = 'meter-1'
         fh.variables['pn'].coordinates = 'lon_rho lat_rho'
         fh.variables['pn'].field = 'pn, scalar'
-        fh.variables['pn'][:] = 1. / grd.hgrid.dy
+        fh.variables['pn'][:] = grd.hgrid.pn
 
         if (geogrid):
             fh.createVariable('lon_rho', 'f8', ('eta_rho', 'xi_rho'))
@@ -395,6 +395,44 @@ def nc_create_roms_bdry_file(filename, grd, tref=None):
     nc_create_var(fh, 'ocean_time', ('ocean_time'),
                   'time since initialization', units, 'time, scalar, series')
     fh.variables['ocean_time'].calendar = 'proleptic_gregorian'
+
+    fh.close()
+
+
+def nc_create_roms_river_file(filename, grd, nriver, tref=None):
+    """
+    Create ROMS river file.
+
+    Inputs:
+        filename     - name of output netCDF file
+        grd          - pyroms grid object
+        nriver       - number of river points
+    """
+
+    # create file
+    fh = nc.Dataset(filename, 'w')
+    fh.Description = 'ROMS river file'
+    fh.Author = 'pyroms.io.nc_create_roms_river_file'
+    fh.Created = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fh.title = 'ROMS file'
+
+    fh.createDimension('river', nriver)
+    fh.createDimension('s_rho', grd.vgrid.N)
+    fh.createDimension('river_time', None)
+
+    tformat = '%Y-%m-%d %H:%M:%S'
+    if tref is None:
+        units = "seconds since 1900-01-01 00:00:00"
+    elif isinstance(tref, datetime):
+        units = 'seconds since ' + tref.strftime(tformat)
+    elif isinstance(tref, datetime64):
+        units = 'seconds since ' + tref.item().strftime(tformat)
+    elif isinstance(tref, str):
+        units = 'seconds since ' + datetime64(tref).item().strftime(tformat)
+
+    nc_create_var(fh, 'river_time', ('river_time'),
+                  'time since initialization', units, 'time, scalar, series')
+    fh.variables['river_time'].calendar = 'proleptic_gregorian'
 
     fh.close()
 

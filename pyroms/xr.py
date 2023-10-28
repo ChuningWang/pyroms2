@@ -2039,7 +2039,8 @@ class ROMSDataArrayAccessor(ROMSAccessor):
             output_core_dims=[[in_dim]],
             exclude_dims=set((self.s_nam,)),
             dask='parallelized')
-        return out.transpose(*lev.dims)
+        out = out.transpose(*lev.dims)
+        return out.where((lev >= self.zice) & (lev <= self.h))
 
     def interpz(self, z: DataArray, zdim: str):
         """
@@ -2069,7 +2070,8 @@ class ROMSDataArrayAccessor(ROMSAccessor):
             output_core_dims=[[zdim]],
             exclude_dims=set((self.s_nam,)),
             dask='parallelized')
-        return out.transpose(*dimsnew)
+        out = out.transpose(*dimsnew)
+        return out.where((z >= self.zice) & (z <= self.h))
 
     """
     Depth/Pressure-related decorator properties

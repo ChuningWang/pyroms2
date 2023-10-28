@@ -46,7 +46,15 @@ class ROMSGrid(object):
 
         ds_grd = grd.xarray_ROMS_grid()
         """
+
         en, xn = self.hgrid.x_rho.shape
+
+        if isinstance(self.hgrid.proj, pyproj.Proj):
+            proj4_init = self.hgrid.proj.crs.to_wkt()
+        elif hasattr(self.hgrid.proj, 'proj4string'):
+            proj4_init = self.hgrid.proj.proj4string
+        else:
+            proj4_init = ''
         ds_grd = xr.Dataset(
             data_vars=dict(
                 h=(
@@ -79,6 +87,7 @@ class ROMSGrid(object):
                     dict(long_name='mask on V-points')),
                 ),
             coords=dict(
+                spherical=self.hgrid.spherical,
                 theta_s=self.vgrid.theta_s,
                 theta_b=self.vgrid.theta_b,
                 Tcline=self.vgrid.Tcline,
@@ -162,7 +171,7 @@ class ROMSGrid(object):
                 Name=self.name,
                 Description='ROMS grid',
                 Author='pyroms.grid.xarray_write_ROMS_grd',
-                spherical=self.hgrid.spherical,
+                proj4_init=proj4_init,
                 )
             )
 
@@ -594,7 +603,7 @@ def get_ROMS_hgrid(gridid):
             if (lon_vert is not None) and (lat_vert is not None):
                 i, j = lon_vert.shape
                 lon0, lat0 = \
-                    lon_vert[int(i/2), int[j/2]], lat_vert[int(i/2), int(j/2)]
+                    lon_vert[int(i/2), int(j/2)], lat_vert[int(i/2), int(j/2)]
             else:
                 i, j = lon_rho.shape
                 lon0, lat0 = \
@@ -831,9 +840,9 @@ def write_ROMS_grid(grd, filename='roms_grd.nc'):
 
     io.nc_write_var(fh, grd.hgrid.f, 'f', ('eta_rho', 'xi_rho'),
                     'Coriolis parameter at RHO-points', 'second-1')
-    io.nc_write_var(fh, 1./grd.hgrid.dx, 'pm', ('eta_rho', 'xi_rho'),
+    io.nc_write_var(fh, grd.hgrid.pm, 'pm', ('eta_rho', 'xi_rho'),
                     'curvilinear coordinate metric in XI', 'meter-1')
-    io.nc_write_var(fh, 1./grd.hgrid.dy, 'pn', ('eta_rho', 'xi_rho'),
+    io.nc_write_var(fh, grd.hgrid.pn, 'pn', ('eta_rho', 'xi_rho'),
                     'curvilinear coordinate metric in ETA', 'meter-1')
     io.nc_write_var(fh, grd.hgrid.dmde, 'dmde', ('eta_rho', 'xi_rho'),
                     'XI derivative of inverse metric factor pn', 'meter')
